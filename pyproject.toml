@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uk-vat-automation"
+version = "0.1.0"
+description = "Configuration-driven browser automation for the UK VAT registration flow"
+requires-python = ">=3.11"
+dependencies = ["playwright>=1.46,<2"]
+
+[project.scripts]
+vat-register = "vat_automation.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vat_automation*"]
+
