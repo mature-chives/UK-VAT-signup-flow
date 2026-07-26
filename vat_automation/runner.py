@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,9 +51,25 @@ class AutomationStopped(RuntimeError):
 
 
 class VatAutomation:
-    def __init__(self, settings: Settings, *, interactive: bool = True) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        interactive: bool = True,
+        verification_code_provider: Callable[[str], Awaitable[str]] | None = None,
+        file_upload_provider: Callable[[str], Awaitable[str | None]] | None = None,
+        file_uploads_remaining_provider: Callable[[], Awaitable[bool]] | None = None,
+        pause_checkpoint_provider: Callable[[str, str], Awaitable[None]] | None = None,
+        event_handler: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+    ) -> None:
         self.settings = settings
         self.interactive = interactive
+        self.verification_code_provider = verification_code_provider
+        self.file_upload_provider = file_upload_provider
+        self.file_uploads_remaining_provider = file_uploads_remaining_provider
+        self.pause_checkpoint_provider = pause_checkpoint_provider
+        self.event_handler = event_handler
+        self._pending_file_path: str | None = None
         self.settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True)
         self.audit_path = self.settings.artifacts_dir / "audit.jsonl"
@@ -93,6 +110,8 @@ class VatAutomation:
             await page.wait_for_load_state("domcontentloaded")
             heading = await self._heading(page)
             await self._audit("page", step=step, url=page.url, heading=heading)
+            if self.pause_checkpoint_provider is not None:
+                await self.pause_checkpoint_provider(page.url, heading)
 
             if self._is_remote_error_heading(heading):
                 await self._snapshot(page, heading, reason="remote-service-error")
@@ -137,6 +156,39 @@ class VatAutomation:
                     )
                 continue
 
+            if "/file-upload/uploading-document" in page.url:
+                if not await self._wait_for_upload_processing(page):
+                    await self._snapshot(
+                        page, heading, reason="file-upload-processing-timeout"
+                    )
+                    raise AutomationStopped(
+                        "HMRC 文件上传处理超过 60 秒，已停止供检查。"
+                    )
+                continue
+
+            if (
+                "/file-upload/summary" in page.url
+                and self.file_uploads_remaining_provider is not None
+            ):
+                remaining = await self.file_uploads_remaining_provider()
+                # HMRC 汇总页始终使用 Continue；如果还缺文件，
+                # 服务端会在提交后自动返回上传页。
+                action_name = "Continue"
+                if not await self._click_named_action(page, action_name):
+                    await self._snapshot(
+                        page, heading, reason="missing-file-upload-summary-action"
+                    )
+                    raise AutomationStopped(
+                        f"文件上传汇总页找不到操作：{action_name}"
+                    )
+                await self._audit(
+                    "file-upload-summary-action",
+                    action=action_name,
+                    files_remaining=remaining,
+                    url=page.url,
+                )
+                continue
+
             action = self.settings.action_for(page.url, heading)
             if action == "stop":
                 await self._snapshot(page, heading, reason="configured-stop")
@@ -167,6 +219,7 @@ class VatAutomation:
             if not clicked:
                 await self._snapshot(page, heading, reason="no-safe-action")
                 raise AutomationStopped("找不到安全的继续按钮，已停止供人工检查。")
+            self._pending_file_path = None
             await page.wait_for_timeout(350)
 
         raise AutomationStopped(f"已达到最大步骤数 {self.settings.max_steps}。")
@@ -280,7 +333,7 @@ class VatAutomation:
         ).first
         heading_normalized = normalize(heading)
         if await code_input.count():
-            if not self.interactive:
+            if not self.interactive and self.verification_code_provider is None:
                 raise AutomationStopped("验证码页面需要用户输入验证码。")
             await self._enter_verification_code(page, code_input)
             return
@@ -362,9 +415,15 @@ class VatAutomation:
         return locator if await locator.count() else None
 
     async def _enter_verification_code(self, page: Any, code_input: Any) -> None:
-        if not self.interactive:
+        heading = await self._heading(page)
+        if self.verification_code_provider is not None:
+            code = await self.verification_code_provider(heading)
+        elif self.interactive:
+            code = await asyncio.to_thread(
+                input, "请输入刚收到的验证码（输入 q 退出）："
+            )
+        else:
             raise AutomationStopped("验证码页面需要用户输入验证码。")
-        code = await asyncio.to_thread(input, "请输入刚收到的验证码（输入 q 退出）：")
         if code.strip().casefold() == "q":
             raise AutomationStopped("用户在验证码阶段退出。")
         if not code.strip():
@@ -381,6 +440,15 @@ class VatAutomation:
             button = page.get_by_role("button", name=name, exact=True)
             if await button.count() and await button.first.is_visible():
                 await button.first.click()
+                return True
+        return False
+
+    @staticmethod
+    async def _wait_for_upload_processing(page: Any, attempts: int = 120) -> bool:
+        """上传中间页没有按钮，应等待 HMRC 完成扫描并自动跳转。"""
+        for _ in range(attempts):
+            await page.wait_for_timeout(500)
+            if "/file-upload/uploading-document" not in page.url:
                 return True
         return False
 
@@ -442,12 +510,20 @@ class VatAutomation:
             key = control.name or control.element_id or control.label
             if control.kind == "radio" and key in completed_radio_groups:
                 continue
-            found, value = self.settings.answer_for(
-                control.label,
-                page.url,
-                heading,
-                aliases=(control.name, control.element_id),
-            )
+            if control.kind == "file" and self.file_upload_provider is not None:
+                if self._pending_file_path is None:
+                    self._pending_file_path = await self.file_upload_provider(
+                        control.label
+                    )
+                found = self._pending_file_path is not None
+                value = self._pending_file_path
+            else:
+                found, value = self.settings.answer_for(
+                    control.label,
+                    page.url,
+                    heading,
+                    aliases=(control.name, control.element_id),
+                )
             if not found:
                 if control.required:
                     missing.append(control.label or key)
@@ -734,6 +810,10 @@ class VatAutomation:
         }
         with self.audit_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if self.event_handler is not None:
+            result = self.event_handler(record)
+            if result is not None:
+                await result
 
     async def _save_state(self, url: str) -> None:
         state = self.settings.artifacts_dir / "state.json"

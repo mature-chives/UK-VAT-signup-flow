@@ -38,6 +38,28 @@ ANSWER_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
         "Describe the type of goods or services the business sells.",
     ),
 )
+FIXED_VAT_PAGE_RULES: tuple[tuple[str, dict[str, str], str], ...] = (
+    (
+        "/register-for-vat/standard-rate-turnover",
+        {"standardRateSupplies": "10000"},
+        "continue",
+    ),
+    (
+        "/register-for-vat/reduced-rate-turnover",
+        {"reducedRateSupplies": "0"},
+        "continue",
+    ),
+    (
+        "/register-for-vat/zero-rated-turnover",
+        {"zeroRatedSupplies": "0"},
+        "continue",
+    ),
+    (
+        "/search-standard-industry-classification-codes",
+        {"sicSearch": "47910"},
+        "Search",
+    ),
+)
 
 
 def normalize(text: str) -> str:
@@ -146,6 +168,32 @@ def build_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
     country = _clean_address_text(address.get("country", ""))
     if postcode:
         answers["Postcode"] = postcode
+    if country:
+        answers["Country"] = country
+    return answers
+
+
+def build_international_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
+    """将结构化地址映射到 HMRC 国际地址的 5 行表单。"""
+    if not address:
+        return {}
+    fields = (
+        ("Address line 1", "premises", False),
+        ("Address line 2", "street", False),
+        ("Address line 3 (optional)", "locality", True),
+        ("Address line 4 (optional)", "city", True),
+        ("Address line 5 (optional)", "region", True),
+    )
+    answers: dict[str, str] = {}
+    for label, key, locality in fields:
+        value = _address_value(address.get(key, ""))
+        if value:
+            answers[label] = _fit_address_field(value, label, locality=locality)
+    postcode = _clean_address_text(address.get("postcode", ""))
+    country = _clean_address_text(address.get("country", ""))
+    if postcode:
+        answers["Postcode"] = postcode
+        answers["Postcode (optional)"] = postcode
     if country:
         answers["Country"] = country
     return answers
@@ -286,6 +334,15 @@ def load_settings(path: Path) -> Settings:
                     item.get("default_answer", UNSET), target_date
                 ),
                 action=item.get("action", "continue"),
+            )
+        )
+    # 这些是当前业务模型的固定规则，追加在最后以防止配置文件中的旧值覆盖。
+    for path_contains, answers, action in FIXED_VAT_PAGE_RULES:
+        pages.append(
+            PageRule(
+                path_contains=path_contains,
+                answers=dict(answers),
+                action=action,
             )
         )
     global_answers = build_address_answers(raw.get("address", {}))

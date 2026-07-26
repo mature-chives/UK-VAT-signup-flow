@@ -7,6 +7,8 @@ from vat_automation.config import (
     PageRule,
     Settings,
     build_address_answers,
+    build_international_address_answers,
+    load_settings,
     normalize,
     resolve_dynamic_value,
     uk_next_month_first,
@@ -134,6 +136,27 @@ class ConfigTests(unittest.TestCase):
             expected,
         )
 
+    def test_fixed_turnover_and_sic_rules_override_config_values(self) -> None:
+        settings = load_settings(Path("vat-config.test.json"))
+        cases = (
+            ("/register-for-vat/standard-rate-turnover", "standardRateSupplies", "10000"),
+            ("/register-for-vat/reduced-rate-turnover", "reducedRateSupplies", "0"),
+            ("/register-for-vat/zero-rated-turnover", "zeroRatedSupplies", "0"),
+            ("/search-standard-industry-classification-codes", "sicSearch", "47910"),
+        )
+        for path, label, expected in cases:
+            self.assertEqual(
+                settings.answer_for(label, f"https://example.test{path}", "Question"),
+                (True, expected),
+            )
+        self.assertEqual(
+            settings.action_for(
+                "https://example.test/search-standard-industry-classification-codes",
+                "Search",
+            ),
+            "Search",
+        )
+
     def test_structured_address_is_split_into_hmrc_fields(self) -> None:
         answers = build_address_answers(
             {
@@ -166,6 +189,23 @@ class ConfigTests(unittest.TestCase):
     def test_structured_address_rejects_unsafe_overflow(self) -> None:
         with self.assertRaisesRegex(ValueError, "Address line 1 超过 35"):
             build_address_answers({"premises": "X" * 36})
+
+    def test_international_address_maps_each_english_component_to_own_line(self) -> None:
+        answers = build_international_address_answers(
+            {
+                "premises": "Room 8, Building 2",
+                "street": "No. 9 Test Road",
+                "locality": "Demo District",
+                "city": "Sample City",
+                "region": "Zhejiang",
+                "postcode": "310000",
+                "country": "China",
+            }
+        )
+        self.assertEqual(answers["Address line 1"], "Room 8, Building 2")
+        self.assertEqual(answers["Address line 3 (optional)"], "Demo District")
+        self.assertEqual(answers["Address line 5 (optional)"], "Zhejiang")
+        self.assertEqual(answers["Postcode (optional)"], "310000")
 
     def test_page_rule_requires_all_supplied_matchers(self) -> None:
         rule = PageRule(path_contains="/vat", heading_contains="Address")
@@ -473,6 +513,136 @@ class ConfigTests(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True):
             asyncio.run(runner._handle_honesty_declaration(page, "Declaration"))
         self.assertTrue(runner.clicked)
+
+    def test_verification_code_can_come_from_web_provider(self) -> None:
+        import asyncio
+
+        class CodeInput:
+            value = ""
+
+            async def fill(self, value: str) -> None:
+                self.value = value
+
+        class WebRunner(VatAutomation):
+            clicked = False
+
+            async def _heading(self, _page: object) -> str:
+                return "Enter the access code"
+
+            async def _audit(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def _click_auth_action(
+                self, _page: object, _names: tuple[str, ...]
+            ) -> bool:
+                self.clicked = True
+                return True
+
+        async def provider(heading: str) -> str:
+            self.assertEqual(heading, "Enter the access code")
+            return "123456"
+
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={},
+            pages=[],
+        )
+        runner = WebRunner(
+            settings,
+            interactive=False,
+            verification_code_provider=provider,
+        )
+        code_input = CodeInput()
+        page = type("FakePage", (), {"url": "https://example.test/code"})()
+        asyncio.run(runner._enter_verification_code(page, code_input))
+        self.assertEqual(code_input.value, "123456")
+        self.assertTrue(runner.clicked)
+
+    def test_auth_code_page_uses_web_provider_when_not_interactive(self) -> None:
+        import asyncio
+
+        class EmptyLocator:
+            @property
+            def first(self) -> "EmptyLocator":
+                return self
+
+            async def count(self) -> int:
+                return 0
+
+        class CodeLocator:
+            value = ""
+
+            @property
+            def first(self) -> "CodeLocator":
+                return self
+
+            async def count(self) -> int:
+                return 1
+
+            async def fill(self, value: str) -> None:
+                self.value = value
+
+        code_input = CodeLocator()
+
+        class Page:
+            url = "https://www.access.service.gov.uk/registration/code"
+
+            def locator(self, selector: str) -> object:
+                if "one-time-code" in selector:
+                    return code_input
+                return EmptyLocator()
+
+        class WebRunner(VatAutomation):
+            async def _heading(self, _page: object) -> str:
+                return "Enter code to confirm your email address"
+
+            async def _audit(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def _click_auth_action(
+                self, _page: object, _names: tuple[str, ...]
+            ) -> bool:
+                return True
+
+        async def provider(_heading: str) -> str:
+            return "654321"
+
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={},
+            pages=[],
+        )
+        runner = WebRunner(
+            settings,
+            interactive=False,
+            verification_code_provider=provider,
+        )
+        asyncio.run(
+            runner._handle_auth(Page(), "Enter code to confirm your email address")
+        )
+        self.assertEqual(code_input.value, "654321")
+
+    def test_upload_processing_page_waits_for_automatic_redirect(self) -> None:
+        import asyncio
+
+        class Page:
+            url = "https://example.test/file-upload/uploading-document"
+            waits = 0
+
+            async def wait_for_timeout(self, _milliseconds: int) -> None:
+                self.waits += 1
+                if self.waits == 2:
+                    self.url = "https://example.test/file-upload/summary"
+
+        page = Page()
+        self.assertTrue(
+            asyncio.run(VatAutomation._wait_for_upload_processing(page, attempts=3))
+        )
+        self.assertEqual(page.waits, 2)
 
     def test_named_action_matches_curly_apostrophe(self) -> None:
         import asyncio

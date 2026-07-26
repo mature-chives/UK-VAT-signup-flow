@@ -7,11 +7,17 @@ name = "uk-vat-automation"
 version = "0.1.0"
 description = "Configuration-driven browser automation for the UK VAT registration flow"
 requires-python = ">=3.11"
-dependencies = ["playwright>=1.46,<2"]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "playwright>=1.46,<2",
+  "pypdf>=5,<7",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn>=0.30,<1",
+]
 
 [project.scripts]
 vat-register = "vat_automation.cli:main"
+vat-web = "vat_automation.web:main"
 
 [tool.setuptools.packages.find]
 include = ["vat_automation*"]
-
