@@ -441,10 +441,40 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(runner._resume_url(), current)
             self.assertEqual((artifacts / "state.json").stat().st_mode & 0o777, 0o600)
 
-    def test_missing_environment_value_is_rejected(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
+    def test_missing_credential_value_is_rejected(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            settings = Settings(
+                start_url="https://example.test",
+                profile_dir=base / "profile",
+                artifacts_dir=base / "artifacts",
+                answers={},
+                pages=[],
+            )
+            runner = VatAutomation(settings, credentials={"HMRC_PRESENT": "value"})
+            self.assertEqual(runner._resolve_value("env:HMRC_PRESENT"), "value")
             with self.assertRaisesRegex(KeyError, "HMRC_TEST_MISSING"):
-                VatAutomation._resolve_value("env:HMRC_TEST_MISSING")
+                runner._resolve_value("env:HMRC_TEST_MISSING")
+
+    def test_explicit_credentials_replace_process_environment(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            settings = Settings(
+                start_url="https://example.test",
+                profile_dir=base / "profile",
+                artifacts_dir=base / "artifacts",
+                answers={},
+                pages=[],
+            )
+            # 显式传入凭据后，进程环境变量不应再被读取。
+            with patch.dict("os.environ", {"HMRC_ONLY_IN_ENV": "leak"}, clear=False):
+                runner = VatAutomation(settings, credentials={})
+                with self.assertRaises(KeyError):
+                    runner._resolve_value("env:HMRC_ONLY_IN_ENV")
 
     def test_radio_can_match_raw_value(self) -> None:
         control = Control(

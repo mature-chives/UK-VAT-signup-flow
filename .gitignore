@@ -4,6 +4,8 @@
 artifacts*/
 vat-config*.json
 !vat-config.example.json
+users.json
+certs/
 .env
 .env.*
 *.pem

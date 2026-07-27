@@ -5,7 +5,7 @@ import json
 import os
 import re
 import sqlite3
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,19 +56,30 @@ class VatAutomation:
         settings: Settings,
         *,
         interactive: bool = True,
+        credentials: Mapping[str, str] | None = None,
         verification_code_provider: Callable[[str], Awaitable[str]] | None = None,
         file_upload_provider: Callable[[str], Awaitable[str | None]] | None = None,
         file_uploads_remaining_provider: Callable[[], Awaitable[bool]] | None = None,
         pause_checkpoint_provider: Callable[[str, str], Awaitable[None]] | None = None,
+        final_review_provider: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
         event_handler: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
+        audit_context: Mapping[str, str] | None = None,
     ) -> None:
         self.settings = settings
         self.interactive = interactive
+        # 显式传入凭据时不再读取进程环境：多用户 Web 场景下 os.environ 是共享的，
+        # 且写进去的密码会被 Playwright 启动的 Chrome 子进程继承。
+        self._credentials: Mapping[str, str] = (
+            dict(credentials) if credentials is not None else os.environ
+        )
         self.verification_code_provider = verification_code_provider
         self.file_upload_provider = file_upload_provider
         self.file_uploads_remaining_provider = file_uploads_remaining_provider
         self.pause_checkpoint_provider = pause_checkpoint_provider
+        self.final_review_provider = final_review_provider
         self.event_handler = event_handler
+        # 多用户场景下用于在审计记录里标注操作人，不含任何凭据。
+        self.audit_context = dict(audit_context or {})
         self._pending_file_path: str | None = None
         self.settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -141,10 +152,8 @@ class VatAutomation:
                 continue
 
             if self._is_final_page(page.url, heading):
-                await self._snapshot(page, heading, reason="final-review")
-                raise AutomationStopped(
-                    "已到达最终复核/声明页面。安全策略禁止自动提交。"
-                )
+                await self._handle_final_review(page, heading)
+                continue
 
             if "/register-for-vat/manage-registrations" in page.url:
                 if not await self._click_create_vat_application(page):
@@ -228,7 +237,7 @@ class VatAutomation:
         """自动处理凭据和安全方式，仅验证码由用户即时输入。"""
         password = page.locator('input[type="password"]:visible')
         if await password.count():
-            user_password = os.environ.get("HMRC_PASSWORD", "")
+            user_password = self._credentials.get("HMRC_PASSWORD", "")
             is_password_creation = (
                 await password.count() > 1
                 or "create a password" in normalize(heading)
@@ -244,7 +253,7 @@ class VatAutomation:
                     raise AutomationStopped("创建密码页面未找到继续按钮。")
                 return
 
-            user_id = os.environ.get("HMRC_USER_ID", "")
+            user_id = self._credentials.get("HMRC_USER_ID", "")
             if not user_id or not user_password:
                 raise AutomationStopped(
                     "缺少登录环境变量 HMRC_USER_ID 或 HMRC_PASSWORD。"
@@ -267,7 +276,7 @@ class VatAutomation:
             'main form input[name*="email" i]:visible'
         ).first
         if await email_input.count():
-            email = os.environ.get("HMRC_EMAIL", "")
+            email = self._credentials.get("HMRC_EMAIL", "")
             if not email:
                 raise AutomationStopped("创建登录凭据需要环境变量 HMRC_EMAIL。")
             await email_input.fill(email)
@@ -280,7 +289,7 @@ class VatAutomation:
             found, configured_name = self.settings.answer_for(
                 "Full name", page.url, heading
             )
-            full_name = os.environ.get(
+            full_name = self._credentials.get(
                 "HMRC_FULL_NAME", str(configured_name) if found else ""
             )
             if not full_name:
@@ -303,7 +312,7 @@ class VatAutomation:
             found, configured_country = self.settings.answer_for(
                 "Country", page.url, heading
             )
-            country = os.environ.get(
+            country = self._credentials.get(
                 "HMRC_MFA_PHONE_COUNTRY",
                 str(configured_country) if found else "",
             )
@@ -340,7 +349,7 @@ class VatAutomation:
 
         telephone = page.locator('main form input[type="tel"]:visible').first
         if await telephone.count():
-            phone = os.environ.get("HMRC_MFA_PHONE", "")
+            phone = self._credentials.get("HMRC_MFA_PHONE", "")
             if not phone:
                 raise AutomationStopped("安全设置页面需要环境变量 HMRC_MFA_PHONE。")
             await telephone.fill(phone)
@@ -360,24 +369,24 @@ class VatAutomation:
                 "government gateway" in normalize(label) for label in available
             )
             if is_sign_in_choice:
-                method = os.environ.get(
+                method = self._credentials.get(
                     "HMRC_SIGN_IN_METHOD", "Create new sign in details"
                 )
                 audit_event = "auth-method-selected"
             elif "tax agent" in heading_normalized:
-                method = os.environ.get("HMRC_IS_TAX_AGENT", "No")
+                method = self._credentials.get("HMRC_IS_TAX_AGENT", "No")
                 audit_event = "auth-tax-agent-selected"
             elif "business or organisation" in heading_normalized:
-                method = os.environ.get("HMRC_ACCESS_AS_BUSINESS", "Yes")
+                method = self._credentials.get("HMRC_ACCESS_AS_BUSINESS", "Yes")
                 audit_event = "auth-organisation-selected"
             elif (
                 "/multi-factor/mobile-number-uk/" in page.url
                 or "adding a uk mobile number" in heading_normalized
             ):
-                method = os.environ.get("HMRC_MFA_PHONE_IS_UK", "Yes")
+                method = self._credentials.get("HMRC_MFA_PHONE_IS_UK", "Yes")
                 audit_event = "mfa-phone-country-selected"
             else:
-                method = os.environ.get("HMRC_MFA_METHOD", "Text message")
+                method = self._credentials.get("HMRC_MFA_METHOD", "Text message")
                 audit_event = "mfa-method-selected"
             option = page.get_by_label(method, exact=False)
             if not await option.count():
@@ -576,13 +585,13 @@ class VatAutomation:
                     await self._choose_autocomplete_option(page, str(value))
         return missing
 
-    @staticmethod
-    def _resolve_value(value: Any) -> Any:
+    def _resolve_value(self, value: Any) -> Any:
         if isinstance(value, str) and value.startswith("env:"):
             variable = value.removeprefix("env:")
-            if not os.environ.get(variable):
+            resolved = self._credentials.get(variable)
+            if not resolved:
                 raise KeyError(variable)
-            return os.environ[variable]
+            return resolved
         return value
 
     @staticmethod
@@ -688,7 +697,7 @@ class VatAutomation:
         return True
 
     async def _handle_honesty_declaration(self, page: Any, heading: str) -> None:
-        warnings = self.settings.live_application_warnings(os.environ)
+        warnings = self.settings.live_application_warnings(self._credentials)
         if warnings:
             await self._snapshot(
                 page,
@@ -723,6 +732,48 @@ class VatAutomation:
             )
         await self._audit("honesty-declaration-accepted", url=page.url)
 
+
+    async def _handle_final_review(self, page: Any, heading: str) -> None:
+        """到达最终复核页：存档整页 PDF 与截图，交人工核对。
+
+        程序在任何分支下都不会点击提交；正式提交只能由人在服务器上完成。
+        """
+        screenshot = await self._snapshot(page, heading, reason="final-review")
+        document = await self._save_page_pdf(page, "final-review")
+        await self._audit(
+            "final-review-reached", url=page.url, pdf_saved=document is not None
+        )
+        if self.final_review_provider is None:
+            raise AutomationStopped(
+                "已到达最终复核/声明页面。安全策略禁止自动提交。"
+            )
+        await self.final_review_provider(
+            {
+                "url": _safe_url(page.url),
+                "heading": heading,
+                "pdf": str(document) if document else "",
+                "screenshot": str(screenshot) if screenshot else "",
+            }
+        )
+        await self._audit("final-review-confirmed", url=page.url)
+        raise AutomationStopped(
+            "最终复核已确认结束。正式提交需在服务器的浏览器中人工完成。"
+        )
+
+    async def _save_page_pdf(self, page: Any, reason: str) -> Path | None:
+        """整页存成 PDF 供核对和打印。失败时返回 None，由整页截图兜底。"""
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        target = self.settings.artifacts_dir / f"{stamp}-{reason}.pdf"
+        try:
+            await page.pdf(path=str(target), print_background=True, format="A4")
+        except Exception:
+            # headed Chromium 上 page.pdf 未必可用，且这是尽力而为的附加产物，
+            # 任何失败都不应中断已经走到最终页的流程。
+            return None
+        if not target.is_file():
+            return None
+        target.chmod(0o600)
+        return target
 
     @staticmethod
     async def _heading(page: Any) -> str:
@@ -780,11 +831,12 @@ class VatAutomation:
         *,
         reason: str,
         missing: list[str] | None = None,
-    ) -> None:
+    ) -> Path:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         png = self.settings.artifacts_dir / f"{stamp}-{reason}.png"
         metadata = self.settings.artifacts_dir / "current-page.json"
         await page.screenshot(path=str(png), full_page=True)
+        png.chmod(0o600)
         metadata.write_text(
             json.dumps(
                 {
@@ -799,6 +851,7 @@ class VatAutomation:
             ),
             encoding="utf-8",
         )
+        return png
 
     async def _audit(self, event: str, **details: Any) -> None:
         if "url" in details:
@@ -806,6 +859,7 @@ class VatAutomation:
         record = {
             "time": datetime.now(UTC).isoformat(),
             "event": event,
+            **self.audit_context,
             **details,
         }
         with self.audit_path.open("a", encoding="utf-8") as stream:

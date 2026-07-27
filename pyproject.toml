@@ -18,6 +18,10 @@ dependencies = [
 [project.scripts]
 vat-register = "vat_automation.cli:main"
 vat-web = "vat_automation.web:main"
+vat-web-user = "vat_automation.auth:main"
 
 [tool.setuptools.packages.find]
 include = ["vat_automation*"]
+
+[tool.setuptools.package-data]
+vat_automation = ["static/*.html"]
