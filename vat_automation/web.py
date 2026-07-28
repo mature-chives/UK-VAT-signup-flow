@@ -92,6 +92,10 @@ class ContinueRequest(BaseModel):
     extracted_confirmed: bool = False
 
 
+class FinalSubmitRequest(BaseModel):
+    confirmed: bool = False
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
@@ -281,7 +285,9 @@ class JobManager:
         with self._lock:
             if session.state["status"] != "reviewing":
                 raise RuntimeError("当前任务未处于待人工核对状态。")
-            session.state["message"] = "已确认核对完毕，正在结束自动化"
+            session.state["message"] = (
+                "已收到人工提交确认，正在点击 HMRC 的 Confirm and submit"
+            )
             session.review_event.set()
 
     def final_review_document(self, username: str, kind: str) -> Path | None:
@@ -404,8 +410,8 @@ class JobManager:
             session.state["url"] = info.get("url", "")
             session.state["heading"] = info.get("heading", "")
             session.state["message"] = (
-                "已到达 Check your answers，请逐项核对。"
-                "程序不会提交，正式提交需在服务器的浏览器中人工完成。"
+                "已到达 Check your answers 并保存复核文件。"
+                "请逐项核对，只有明确确认后程序才会提交到 HMRC。"
             )
         confirmed = await asyncio.to_thread(
             session.review_event.wait, FINAL_REVIEW_TIMEOUT_SECONDS
@@ -877,8 +883,13 @@ async def final_review_png(username: str = Depends(current_user)) -> FileRespons
 
 @app.post("/api/final-review/confirm")
 async def final_review_confirm(
+    request: FinalSubmitRequest,
     username: str = Depends(current_user), _: None = Depends(require_csrf)
 ) -> dict[str, str]:
+    if not request.confirmed:
+        raise HTTPException(
+            status_code=400, detail="请明确确认资料无误并同意提交到 HMRC。"
+        )
     try:
         context.jobs().confirm_final_review(username)
     except RuntimeError as exc:

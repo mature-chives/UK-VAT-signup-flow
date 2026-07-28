@@ -7,7 +7,7 @@
 - Government Gateway 用户名和密码从环境变量读取并自动填写；仅验证码暂停等待用户输入。
 - 遇到缺少的必填字段、未知按钮或配置为 `stop` 的页面时立即停止，并保存截图与页面元数据。
 - 初始诚信声明页会自动点击 `Accept and continue`；若检测到明显测试资料会直接停止。
-- 到达 `Check your answers` 或正式提交页面时强制停止；程序没有最终提交能力。
+- 到达 `Check your answers` 时保存整页复核文件并暂停；只有网页用户明确勾选确认后，程序才会点击 `Confirm and submit`。
 - 测试配置默认设置 `allow_live_application: false`，进入真实 VAT 申请数据区前停止，防止把随机资料写入 HMRC。
 - 浏览器会话保存在本地 `.browser-profile/`，运行记录保存在 `artifacts/`，两者均默认忽略，不应提交到版本库。
 - 不要把 Government Gateway 用户名、密码或 MFA 密钥写入 JSON；用户名和密码仅通过进程环境变量传入，验证码只在内存中短暂使用。
@@ -78,7 +78,7 @@ cp vat-config.example.json vat-config.json
 日期值 `date:uk-next-month-first.day`、`.month`、`.year` 会在每次启动时按英国 `Europe/London` 当地日期解析为下个月 1 日。12 月运行时会自动跨年到下一年 1 月 1 日。
 `vat-return-stagger:uk-next-month-first` 会使用同一个注册日期月份，自动选择对应的季度 VAT Returns 申报组。
 
-只有改用经过核实的真实申请资料后，才可显式设置 `allow_live_application: true`。启用后，初始诚信声明页会自动点击 `Accept and continue`；若配置或环境变量里仍有 `example.com`、`TEST-`、`07700 900xxx`、`Synthetic`、`Northstar`、`Tester` 等测试标记，程序会拒绝点击声明按钮。最终复核和正式提交仍会强制停止等待人工处理。
+只有改用经过核实的真实申请资料后，才可显式设置 `allow_live_application: true`。启用后，初始诚信声明页会自动点击 `Accept and continue`；若配置或环境变量里仍有 `example.com`、`TEST-`、`07700 900xxx`、`Synthetic`、`Northstar`、`Tester` 等测试标记，程序会拒绝点击声明按钮。最终复核会强制暂停并等待网页用户明确确认，未确认时不会提交。
 
 ## 运行
 
@@ -155,7 +155,7 @@ vat-register --config vat-config.test.json
 - 启动可见的本地 Chrome 自动化；
 - 在网页中输入邮箱验证码和短信验证码；
 - 在安全页面边界暂停自动化，修改并重新确认资料后从当前 HMRC 页面继续；
-- 到达 `Check your answers` 时自动保存整页 PDF（失败时保存整页截图），在网页中预览、下载和打印，逐项核对后点击“我已核对完毕，结束自动化”；
+- 到达 `Check your answers` 时先点击 `Show all sections` 展开全部答案，再保存整页 PDF（失败时保存整页截图）供下载核对；逐项核对并明确勾选确认后，程序点击 `Confirm and submit`；
 - 查看当前 HMRC 页面、运行状态和最近操作；
 - 显示安全停止或失败原因。
 
@@ -194,7 +194,7 @@ Web UI 默认只绑定 `127.0.0.1`，一次只运行一个任务。配置文件�
 - 每位同事的提取资料、身份证明文件、运行状态、最终核对文档互相隔离；审计日志记录操作人。
 - 一次只运行一个客户的申请。他人任务运行时，页面会显示当前占用者，需等待其结束。
 - HMRC 凭据只通过内存传给自动化进程，不写入进程环境变量，不会被浏览器子进程继承。
-- **程序不具备提交能力。** 到达 `Check your answers` 后网页上的按钮只是结束自动化；正式提交必须由人在服务器的浏览器中完成。
+- **正式提交必须人工确认。** 到达 `Check your answers` 后程序保存复核文件并暂停；只有当前任务用户在网页勾选确认并点击“确认并提交到 HMRC”，程序才会精确点击 `Confirm and submit`。30 分钟内未确认则关闭浏览器且不提交。
 - 服务器本机是整个系统的安全边界：`artifacts/` 内有含客户个人信息的截图和 PDF，请勿共享该机器或让其休眠导致会话中断。
 
 ## 验证

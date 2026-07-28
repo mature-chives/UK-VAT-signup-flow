@@ -207,6 +207,45 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(answers["Address line 5 (optional)"], "Zhejiang")
         self.assertEqual(answers["Postcode (optional)"], "310000")
 
+    def test_international_address_keeps_full_words_and_splits_long_street(self) -> None:
+        answers = build_international_address_answers(
+            {
+                "premises": "Room 509, 5th Floor, Building 4",
+                "street": "No. 532 Xingtian Road, Donghu Street",
+                "locality": "Linping District",
+                "city": "Hangzhou City",
+                "region": "Zhejiang Province",
+                "postcode": "310000",
+                "country": "China",
+            }
+        )
+        self.assertEqual(
+            {
+                key: answers[key]
+                for key in (
+                    "Address line 1",
+                    "Address line 2",
+                    "Address line 3 (optional)",
+                    "Address line 4 (optional)",
+                    "Address line 5 (optional)",
+                )
+            },
+            {
+                "Address line 1": "Room 509, 5th Floor, Building 4",
+                "Address line 2": "No. 532 Xingtian Road",
+                "Address line 3 (optional)": "Donghu Street",
+                "Address line 4 (optional)": "Linping District",
+                "Address line 5 (optional)": "Hangzhou City, Zhejiang Province",
+            },
+        )
+        self.assertTrue(
+            all(
+                len(value) <= 35
+                for key, value in answers.items()
+                if key.startswith("Address line")
+            )
+        )
+
     def test_page_rule_requires_all_supplied_matchers(self) -> None:
         rule = PageRule(path_contains="/vat", heading_contains="Address")
         self.assertTrue(rule.matches("https://example.test/vat", "Home address"))
@@ -315,8 +354,194 @@ class ConfigTests(unittest.TestCase):
                 "Check your answers",
             )
         )
+        self.assertTrue(
+            runner._is_final_page(
+                "https://www.tax.service.gov.uk/register-for-vat/check-confirm-answers",
+                "Check your answers before sending your application",
+            )
+        )
         self.assertNotIn("Submit application", SAFE_ACTIONS)
         self.assertIn("Continue to register for VAT", SAFE_ACTIONS)
+
+    def test_final_review_submits_only_after_provider_confirmation(self) -> None:
+        import asyncio
+        import tempfile
+
+        sequence: list[str] = []
+
+        class ReviewRunner(VatAutomation):
+            async def _expand_final_review_sections(
+                self, _page: object, _heading: str
+            ) -> None:
+                sequence.append("expanded")
+
+            async def _snapshot(
+                self, _page: object, _heading: str, **_kwargs: object
+            ) -> Path:
+                sequence.append("screenshot")
+                return self.settings.artifacts_dir / "review.png"
+
+            async def _save_page_pdf(self, _page: object, _reason: str) -> Path:
+                sequence.append("pdf")
+                return self.settings.artifacts_dir / "review.pdf"
+
+            async def _audit(self, event: str, **_kwargs: object) -> None:
+                sequence.append(event)
+
+            async def _click_named_action(self, _page: object, name: str) -> bool:
+                sequence.append(f"click:{name}")
+                return name == "Confirm and submit"
+
+            async def _verify_final_submission(
+                self, _page: object, _heading: str, _action: str
+            ) -> None:
+                sequence.append("application-submitted")
+
+        async def provider(info: dict[str, object]) -> None:
+            self.assertTrue(str(info["pdf"]).endswith("review.pdf"))
+            sequence.append("human-confirmed")
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            runner = ReviewRunner(
+                Settings(
+                    start_url="https://example.test",
+                    profile_dir=base / "profile",
+                    artifacts_dir=base / "artifacts",
+                    answers={},
+                    pages=[],
+                ),
+                interactive=False,
+                final_review_provider=provider,
+            )
+            page = type(
+                "Page",
+                (),
+                {
+                    "url": (
+                        "https://www.tax.service.gov.uk/register-for-vat/"
+                        "check-confirm-answers"
+                    )
+                },
+            )()
+            asyncio.run(
+                runner._handle_final_review(
+                    page, "Check your answers before sending your application"
+                )
+            )
+
+        self.assertLess(
+            sequence.index("human-confirmed"),
+            sequence.index("click:Confirm and submit"),
+        )
+        self.assertLess(sequence.index("expanded"), sequence.index("screenshot"))
+        self.assertLess(sequence.index("expanded"), sequence.index("pdf"))
+        self.assertIn("application-submitted", sequence)
+
+    def test_final_review_expands_all_sections_before_archiving(self) -> None:
+        import asyncio
+        import tempfile
+
+        class Toggle:
+            def __init__(self, page: "Page", name: str) -> None:
+                self.page = page
+                self.name = name
+
+            @property
+            def first(self) -> "Toggle":
+                return self
+
+            async def count(self) -> int:
+                expected = "Hide all sections" if self.page.expanded else "Show all sections"
+                return int(self.name == expected)
+
+            async def is_visible(self) -> bool:
+                return bool(await self.count())
+
+            async def click(self) -> None:
+                self.page.expanded = True
+
+        class Page:
+            url = "https://example.test/register-for-vat/check-confirm-answers"
+            expanded = False
+
+            def get_by_role(
+                self, _role: str, *, name: str, exact: bool = True
+            ) -> Toggle:
+                return Toggle(self, name)
+
+            async def wait_for_timeout(self, _milliseconds: int) -> None:
+                return None
+
+        class ReviewRunner(VatAutomation):
+            async def _audit(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            runner = ReviewRunner(
+                Settings(
+                    start_url="https://example.test",
+                    profile_dir=base / "profile",
+                    artifacts_dir=base / "artifacts",
+                    answers={},
+                    pages=[],
+                ),
+                interactive=False,
+            )
+            page = Page()
+            asyncio.run(
+                runner._expand_final_review_sections(
+                    page, "Check your answers before sending your application"
+                )
+            )
+            self.assertTrue(page.expanded)
+
+    def test_final_submit_is_not_completed_while_review_page_remains(self) -> None:
+        import asyncio
+        import tempfile
+
+        class Page:
+            url = (
+                "https://www.tax.service.gov.uk/register-for-vat/"
+                "check-confirm-answers"
+            )
+
+            async def wait_for_load_state(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def wait_for_timeout(self, _milliseconds: int) -> None:
+                return None
+
+        class ReviewRunner(VatAutomation):
+            async def _heading(self, _page: object) -> str:
+                return "Check your answers before sending your application"
+
+            async def _snapshot(
+                self, _page: object, _heading: str, **_kwargs: object
+            ) -> Path:
+                return self.settings.artifacts_dir / "not-submitted.png"
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            runner = ReviewRunner(
+                Settings(
+                    start_url="https://example.test",
+                    profile_dir=base / "profile",
+                    artifacts_dir=base / "artifacts",
+                    answers={},
+                    pages=[],
+                ),
+                interactive=False,
+            )
+            with self.assertRaisesRegex(AutomationStopped, "仍停留"):
+                asyncio.run(
+                    runner._verify_final_submission(
+                        Page(),
+                        "Check your answers before sending your application",
+                        "Confirm and submit",
+                    )
+                )
 
     def test_intermediate_identity_review_is_not_final(self) -> None:
         settings = Settings(

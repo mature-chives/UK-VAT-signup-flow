@@ -15,6 +15,7 @@ from vat_automation.web import (
     CSRF_HEADER,
     SESSION_COOKIE,
     ContinueRequest,
+    FinalSubmitRequest,
     JobManager,
     LoginRequest,
     SetupRequest,
@@ -27,6 +28,7 @@ from vat_automation.web import (
     current_user,
     delete_user,
     final_review_pdf,
+    final_review_confirm,
     index,
     list_users,
     login,
@@ -471,6 +473,15 @@ class JobManagerTests(WebAuthContext):
             asyncio.run(final_review_pdf(username="bob"))
         self.assertEqual(caught.exception.status_code, 404)
 
+    def test_final_submit_requires_explicit_confirmation(self) -> None:
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(
+                final_review_confirm(
+                    FinalSubmitRequest(confirmed=False), username="alice", _=None
+                )
+            )
+        self.assertEqual(caught.exception.status_code, 400)
+
     def test_reinjected_rules_do_not_accumulate(self) -> None:
         manager = context.jobs()
         session = manager.session("alice")
@@ -532,7 +543,12 @@ class EndpointTests(WebAuthContext):
         html = (static_dir / "index.html").read_text(encoding="utf-8")
         self.assertIn("最终核对", html)
         self.assertIn("/api/final-review/pdf", html)
-        self.assertIn("我已核对完毕，结束自动化", html)
+        self.assertIn("确认并提交到 HMRC", html)
+        self.assertIn("review-submit-consent", html)
+        self.assertIn("{confirmed:true}", html)
+        self.assertIn("下载完整 PDF 存档", html)
+        self.assertNotIn("review-frame", html)
+        self.assertNotIn("review-print", html)
         self.assertIn("X-CSRF-Token", html)
         self.assertIn("配置文件（由服务端启动参数固定）", html)
         self.assertNotIn("config_path", html)

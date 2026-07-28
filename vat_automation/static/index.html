@@ -26,6 +26,7 @@
     .row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
     button { margin-top:14px; padding:10px 18px; border:0; border-radius:3px; background:var(--green); color:white; font:700 16px inherit; cursor:pointer; box-shadow:0 2px 0 #003d20; }
     button.secondary { background:var(--blue); box-shadow:0 2px 0 #003b67; }
+    button.danger { background:var(--red); box-shadow:0 2px 0 #7a1d0f; }
     button:disabled { opacity:.5; cursor:not-allowed; }
     .section { border-top:1px solid var(--line); margin-top:24px; padding-top:4px; }
     .hint,.meta { overflow-wrap:anywhere; color:var(--muted); font-size:14px; margin-top:5px; }
@@ -48,12 +49,10 @@
     #otp { display:none; padding:16px; border:2px solid #f47738; margin:18px 0; background:#fff9f3; }
     #busy { display:none; padding:12px 14px; margin-bottom:16px; font-size:14px; background:#fff7bf; border-left:5px solid #ffdd00; }
     #review { display:none; margin-top:24px; }
-    #review-frame { width:100%; height:520px; border:1px solid var(--line); border-radius:4px; background:#fafafa; }
-    #review-image { width:100%; border:1px solid var(--line); border-radius:4px; }
-    .review-actions { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .review-download { display:inline-block; margin:4px 0 10px; font-weight:700; }
     .events { max-height:360px; overflow:auto; padding:0; list-style:none; border-top:1px solid var(--line); }
     .events li { padding:9px 0; border-bottom:1px solid var(--line); font-size:13px; }
-    @media (max-width:800px) { main { grid-template-columns:1fr; } .row,.fields,.review-actions { grid-template-columns:1fr; } .fields .wide { grid-column:auto; } }
+    @media (max-width:800px) { main { grid-template-columns:1fr; } .row,.fields { grid-template-columns:1fr; } .fields .wide { grid-column:auto; } }
   </style>
 </head>
 <body>
@@ -112,14 +111,10 @@
 
     <div id="review" class="section">
       <h2>最终核对</h2>
-      <div class="notice">程序不会提交申请。请逐项核对下方内容；确认无误后，正式提交需要在服务器的浏览器中人工完成。</div>
-      <iframe id="review-frame" title="Check your answers"></iframe>
-      <img id="review-image" alt="Check your answers 截图" style="display:none">
-      <div class="review-actions">
-        <a id="review-download" class="hint" href="/api/final-review/pdf" download>下载 PDF 存档</a>
-        <button id="review-print" class="secondary" type="button">打印</button>
-      </div>
-      <button id="review-confirm" type="button">我已核对完毕，结束自动化</button>
+      <div class="notice">请逐项核对下方存档。确认操作不可撤销：确认后程序会点击 HMRC 的“Confirm and submit”，正式提交 VAT 注册申请。</div>
+      <a id="review-download" class="review-download" href="/api/final-review/pdf" download>下载完整 PDF 存档</a>
+      <label><input id="review-submit-consent" type="checkbox" style="width:auto"> 我确认资料真实、完整且无误，并同意正式提交到 HMRC</label>
+      <button id="review-confirm" class="danger" type="button" disabled>确认并提交到 HMRC</button>
       <div id="review-message" class="message"></div>
     </div>
   </section>
@@ -163,7 +158,6 @@ let extractedValues = {};
 let extractedLabels = {};
 let identityCount = 0;
 let extractionConfirmed = false;
-let reviewLoaded = false;
 
 async function post(url, body) {
   const isForm = body instanceof FormData;
@@ -308,22 +302,25 @@ $('continue').addEventListener('click', async () => {
   if (!response.ok) setMessage('pause-error', body.detail || '继续失败', 'error');
 });
 
-$('review-print').addEventListener('click', () => {
-  const frame = $('review-frame');
-  try {
-    if (frame.style.display !== 'none' && frame.contentWindow) {
-      frame.contentWindow.focus(); frame.contentWindow.print(); return;
-    }
-  } catch (_) {}
-  window.open($('review-download').getAttribute('href'), '_blank');
-});
-
 $('review-confirm').addEventListener('click', async () => {
   setMessage('review-message', '');
-  const response = await post('/api/final-review/confirm');
+  if (!$('review-submit-consent').checked) {
+    setMessage('review-message', '请先勾选提交确认。', 'error');
+    return;
+  }
+  $('review-confirm').disabled = true;
+  const response = await post('/api/final-review/confirm', {confirmed:true});
   const body = await response.json();
-  if (!response.ok) setMessage('review-message', body.detail || '确认失败', 'error');
-  else setMessage('review-message', '已确认核对完毕，自动化正在结束。', 'ok');
+  if (!response.ok) {
+    setMessage('review-message', body.detail || '提交确认失败', 'error');
+    $('review-confirm').disabled = false;
+  } else {
+    setMessage('review-message', '确认已发送，程序正在点击 HMRC 的 Confirm and submit。', 'ok');
+  }
+});
+
+$('review-submit-consent').addEventListener('change', () => {
+  $('review-confirm').disabled = !$('review-submit-consent').checked;
 });
 
 let isAdmin = false;
@@ -372,22 +369,19 @@ function showAdmin(admin) {
 }
 
 function showReview(info) {
-  if (!info || !info.available) { $('review').style.display = 'none'; reviewLoaded = false; return; }
+  if (!info || !info.available) {
+    $('review').style.display = 'none';
+    $('review-submit-consent').checked = false;
+    $('review-confirm').disabled = true;
+    return;
+  }
   $('review').style.display = 'block';
-  if (reviewLoaded) return;
-  reviewLoaded = true;
   if (info.pdf) {
-    $('review-frame').src = '/api/final-review/pdf';
-    $('review-frame').style.display = 'block';
-    $('review-image').style.display = 'none';
     $('review-download').setAttribute('href', '/api/final-review/pdf');
-    $('review-download').textContent = '下载 PDF 存档';
+    $('review-download').textContent = '下载完整 PDF 存档';
   } else if (info.png) {
-    $('review-frame').style.display = 'none';
-    $('review-image').src = '/api/final-review/png';
-    $('review-image').style.display = 'block';
     $('review-download').setAttribute('href', '/api/final-review/png');
-    $('review-download').textContent = '下载截图存档';
+    $('review-download').textContent = 'PDF 生成失败，下载完整截图存档';
   }
 }
 

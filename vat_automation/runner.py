@@ -153,7 +153,7 @@ class VatAutomation:
 
             if self._is_final_page(page.url, heading):
                 await self._handle_final_review(page, heading)
-                continue
+                return
 
             if "/register-for-vat/manage-registrations" in page.url:
                 if not await self._click_create_vat_application(page):
@@ -734,10 +734,8 @@ class VatAutomation:
 
 
     async def _handle_final_review(self, page: Any, heading: str) -> None:
-        """到达最终复核页：存档整页 PDF 与截图，交人工核对。
-
-        程序在任何分支下都不会点击提交；正式提交只能由人在服务器上完成。
-        """
+        """存档最终复核页，等待人工确认后提交真实申请。"""
+        await self._expand_final_review_sections(page, heading)
         screenshot = await self._snapshot(page, heading, reason="final-review")
         document = await self._save_page_pdf(page, "final-review")
         await self._audit(
@@ -756,8 +754,68 @@ class VatAutomation:
             }
         )
         await self._audit("final-review-confirmed", url=page.url)
+        action = "Confirm and submit"
+        if not await self._click_named_action(page, action):
+            await self._snapshot(
+                page, heading, reason="missing-confirm-and-submit"
+            )
+            raise AutomationStopped(
+                f"人工已确认，但最终复核页找不到按钮：{action}"
+            )
+        await self._verify_final_submission(page, heading, action)
+
+    async def _expand_final_review_sections(self, page: Any, heading: str) -> None:
+        """展开最终复核页的全部 accordion，确保截图和 PDF 包含答案。"""
+        hide_all = page.get_by_role("button", name="Hide all sections", exact=True)
+        if await hide_all.count() and await hide_all.first.is_visible():
+            return
+
+        show_all = page.get_by_role("button", name="Show all sections", exact=True)
+        if not await show_all.count() or not await show_all.first.is_visible():
+            # 页面没有 accordion 时不阻断；内容本身已经全部可见。
+            return
+
+        await self._audit("expand-final-review", text="Show all sections", url=page.url)
+        await show_all.first.click()
+        for _ in range(30):
+            hide_all = page.get_by_role(
+                "button", name="Hide all sections", exact=True
+            )
+            if await hide_all.count() and await hide_all.first.is_visible():
+                await page.wait_for_timeout(300)
+                return
+            await page.wait_for_timeout(100)
+
+        await self._snapshot(
+            page, heading, reason="final-review-expand-failed"
+        )
         raise AutomationStopped(
-            "最终复核已确认结束。正式提交需在服务器的浏览器中人工完成。"
+            "已点击 Show all sections，但复核页面未完成展开，已停止避免生成不完整 PDF。"
+        )
+
+    async def _verify_final_submission(
+        self, page: Any, previous_heading: str, action: str
+    ) -> None:
+        """等待提交跳转，避免按钮刚点击就关闭浏览器并误报完成。"""
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=30_000)
+        except Exception:
+            # 某些 HMRC 页面使用客户端跳转；下面仍会检查 URL 和标题。
+            pass
+        await page.wait_for_timeout(500)
+        heading = await self._heading(page)
+        if self._is_final_page(page.url, heading):
+            await self._snapshot(
+                page,
+                heading or previous_heading,
+                reason="final-submit-not-completed",
+            )
+            raise AutomationStopped(
+                "已点击 Confirm and submit，但页面仍停留在最终复核页，"
+                "申请可能尚未提交，请人工检查。"
+            )
+        await self._audit(
+            "application-submitted", action=action, url=page.url, heading=heading
         )
 
     async def _save_page_pdf(self, page: Any, reason: str) -> Path | None:
@@ -820,7 +878,13 @@ class VatAutomation:
     def _is_final_page(self, url: str, heading: str) -> bool:
         haystack = normalize(url + " " + heading)
         path = urlparse(url).path.casefold()
-        if "/register-for-vat/check-your-answers" in path:
+        if any(
+            marker in path
+            for marker in (
+                "/register-for-vat/check-your-answers",
+                "/register-for-vat/check-confirm-answers",
+            )
+        ):
             return True
         return any(normalize(marker) in haystack for marker in FINAL_MARKERS)
 

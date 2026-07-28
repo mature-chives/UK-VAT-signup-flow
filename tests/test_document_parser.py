@@ -120,7 +120,7 @@ class DocumentParserTests(unittest.TestCase):
         self.assertEqual(values["business_phone"], "13800138000")
         self.assertEqual(values["first_name"], "Ming")
         self.assertEqual(values["last_name"], "Li")
-        self.assertEqual(values["premises"], "Room 8,Building 2")
+        self.assertEqual(values["premises"], "Room 8, Building 2")
         self.assertEqual(values["country"], "China")
 
     def test_chinese_legal_representative_name_is_removed(self) -> None:
@@ -139,21 +139,29 @@ class DocumentParserTests(unittest.TestCase):
         self.assertEqual(values["last_name"], "Zhang")
 
     def test_project_reference_uses_filename_code_and_english_business_name(self) -> None:
-        values = extract_document(
+        content = (
+            "Business name: Hangzhou Fell Wheel Technology Co., Ltd\n"
+            "Full name: San Zhang\n"
+            "Email: user@example.test\n"
+            "Phone: 8613800138000\n"
+            "City: Hangzhou\n"
+        ).encode()
+        filenames = (
             "客户信息及服务授权表-新注册VAT-AB223322公司名.txt",
-            (
-                "Business name: Hangzhou Fell Wheel Technology Co., Ltd\n"
-                "Full name: San Zhang\n"
-                "Email: user@example.test\n"
-                "Phone: 8613800138000\n"
-                "City: Hangzhou\n"
-            ).encode(),
-        )["values"]
-        self.assertEqual(values["project_code"], "AB223322")
-        self.assertEqual(
-            values["application_reference"],
-            "AB223322-UK-Hangzhou Fell Wheel Technology Co., Ltd",
+            "客户信息及服务授权表-新注册VAT-AB223322上海某公司.txt",
+            "客户信息及服务授权表-新注册VAT-AB223322广州另一企业.txt",
+            "客户信息及服务授权表-新注册VAT-AB223322-上海某公司.txt",
+            "客户信息及服务授权表-新注册VAT-AB223322_上海某公司.txt",
+            "客户信息及服务授权表-新注册VAT-AB223322HangzhouCompany.txt",
         )
+        for filename in filenames:
+            with self.subTest(filename=filename):
+                values = extract_document(filename, content)["values"]
+                self.assertEqual(values["project_code"], "AB223322")
+                self.assertEqual(
+                    values["application_reference"],
+                    "AB223322-UK-Hangzhou Fell Wheel Technology Co., Ltd",
+                )
 
     def test_birth_date_is_converted_to_hmrc_components(self) -> None:
         self.assertEqual(

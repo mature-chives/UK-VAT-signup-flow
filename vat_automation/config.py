@@ -174,21 +174,41 @@ def build_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
 
 
 def build_international_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
-    """将结构化地址映射到 HMRC 国际地址的 5 行表单。"""
+    """将完整英文地址分配到 HMRC 国际地址的 5 行表单，不做缩写。"""
     if not address:
         return {}
-    fields = (
-        ("Address line 1", "premises", False),
-        ("Address line 2", "street", False),
-        ("Address line 3 (optional)", "locality", True),
-        ("Address line 4 (optional)", "city", True),
-        ("Address line 5 (optional)", "region", True),
+    labels = (
+        "Address line 1",
+        "Address line 2",
+        "Address line 3 (optional)",
+        "Address line 4 (optional)",
+        "Address line 5 (optional)",
     )
-    answers: dict[str, str] = {}
-    for label, key, locality in fields:
+    lines: list[str] = []
+    for key in ("premises", "street", "locality", "city", "region"):
         value = _address_value(address.get(key, ""))
         if value:
-            answers[label] = _fit_address_field(value, label, locality=locality)
+            lines.extend(_split_full_address_component(value, key))
+
+    # 某个较长组成部分被拆行后可能超过 5 行。优先从地址末尾合并
+    # 相邻短行，例如 "Hangzhou City, Zhejiang Province"，保持原始顺序。
+    while len(lines) > len(labels):
+        merged = False
+        for index in range(len(lines) - 2, -1, -1):
+            candidate = f"{lines[index]}, {lines[index + 1]}"
+            if len(candidate) <= ADDRESS_MAX_LENGTH:
+                lines[index:index + 2] = [candidate]
+                merged = True
+                break
+        if not merged:
+            raise ValueError(
+                "完整国际地址无法在不缩写的情况下放入 5 个地址栏："
+                + " | ".join(lines)
+            )
+
+    answers: dict[str, str] = {}
+    for label, value in zip(labels, lines, strict=False):
+        answers[label] = value
     postcode = _clean_address_text(address.get("postcode", ""))
     country = _clean_address_text(address.get("country", ""))
     if postcode:
@@ -197,6 +217,44 @@ def build_international_address_answers(address: Mapping[str, Any]) -> dict[str,
     if country:
         answers["Country"] = country
     return answers
+
+
+def _split_full_address_component(value: str, field: str) -> list[str]:
+    """按逗号和单词边界拆行，完整保留内容且每行不超过 35 字符。"""
+    if len(value) <= ADDRESS_MAX_LENGTH:
+        return [value]
+
+    comma_parts = [
+        part.strip() for part in re.split(r",\s*", value) if part.strip()
+    ]
+    parts: list[str] = []
+    for part in comma_parts:
+        if len(part) <= ADDRESS_MAX_LENGTH:
+            parts.append(part)
+            continue
+        current = ""
+        for word in part.split():
+            if len(word) > ADDRESS_MAX_LENGTH:
+                raise ValueError(
+                    f"{field} 含有超过 {ADDRESS_MAX_LENGTH} 个字符的连续内容：{word}"
+                )
+            candidate = f"{current} {word}".strip()
+            if len(candidate) <= ADDRESS_MAX_LENGTH:
+                current = candidate
+            else:
+                parts.append(current)
+                current = word
+        if current:
+            parts.append(current)
+
+    lines: list[str] = []
+    for part in parts:
+        candidate = f"{lines[-1]}, {part}" if lines else part
+        if lines and len(candidate) <= ADDRESS_MAX_LENGTH:
+            lines[-1] = candidate
+        else:
+            lines.append(part)
+    return lines
 
 
 @dataclass(slots=True)

@@ -393,7 +393,7 @@ def _normalize_latin_name(value: str) -> str:
 def _parse_business_address(raw: str, postcode: str, country: str) -> dict[str, str]:
     address = re.sub(r"\s+", " ", raw).strip(" ,")
     english_start = re.search(
-        r"\b(?:Room|Rm|Suite|Unit|Building|Bldg|No\.)\b",
+        r"(?:\b(?:Room|Rm|Suite|Unit|Building|Bldg)\b|\bNo\.)",
         address,
         flags=re.IGNORECASE,
     )
@@ -417,13 +417,17 @@ def _parse_business_address(raw: str, postcode: str, country: str) -> dict[str, 
         (
             index
             for index, part in enumerate(parts[:locality_index])
-            if re.search(r"\b(?:No\.|Road|Rd|Street|St|Avenue|Ave)\b", part, re.I)
+            if re.search(
+                r"(?:\bNo\.|\b(?:Road|Rd|Street|St|Avenue|Ave)\b)",
+                part,
+                re.I,
+            )
         ),
         min(1, locality_index),
     )
     result: dict[str, str] = {}
     if street_index:
-        result["premises"] = ",".join(parts[:street_index])
+        result["premises"] = ", ".join(parts[:street_index])
     if street_index < locality_index:
         result["street"] = ", ".join(parts[street_index:locality_index])
     locality_parts = parts[locality_index:]
@@ -451,8 +455,10 @@ def _field_key(value: str) -> str:
 
 def _extract_project_code(filename: str) -> str:
     stem = Path(filename).stem
+    # 项目编号自身采用“英文字母 + 数字”的格式。编号后的内容是可变的
+    # 公司名称或人工备注，不能作为识别条件，也不能并入项目编号。
     match = re.search(
-        r"新注册\s*VAT[-_\s]*([A-Za-z0-9]+?)(?=公司名(?:简称)?|公司名称|$)",
+        r"新注册\s*VAT[-_\s]*([A-Za-z]+\d+)",
         stem,
         flags=re.IGNORECASE,
     )
