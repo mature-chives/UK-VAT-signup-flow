@@ -155,7 +155,7 @@ vat-register --config vat-config.test.json
 - 启动可见的本地 Chrome 自动化；
 - 在网页中输入邮箱验证码和短信验证码；
 - 在安全页面边界暂停自动化，修改并重新确认资料后从当前 HMRC 页面继续；
-- 到达 `Check your answers` 时先点击 `Show all sections` 展开全部答案，再保存整页 PDF（失败时保存整页截图）供下载核对；逐项核对并明确勾选确认后，程序点击 `Confirm and submit`；
+- 到达 `Check your answers` 时先点击 `Show all sections` 展开全部答案，再保存整页 PDF（失败时保存整页截图）供下载核对；如需修改，网页会列出 HMRC 的全部 `Change` 项，并把所选修改页的字段、当前值、选项和校验错误同步到远程网页，用户保存后自动继续并重新生成最终核对存档；逐项核对并明确勾选确认后，程序点击 `Confirm and submit`；
 - 查看当前 HMRC 页面、运行状态和最近操作；
 - 显示安全停止或失败原因。
 

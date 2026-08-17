@@ -186,6 +186,29 @@ class ConfigTests(unittest.TestCase):
             )
         )
 
+    def test_page_specific_alias_wins_over_global_email_label(self) -> None:
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={"Email address": "personal@example.test"},
+            pages=[
+                PageRule(
+                    path_contains="/register-for-vat/business-email",
+                    answers={"businessEmailAddress": "vat@example.test"},
+                )
+            ],
+        )
+        self.assertEqual(
+            settings.answer_for(
+                "Email address",
+                "https://example.test/register-for-vat/business-email",
+                "What is the business email address?",
+                aliases=("businessEmailAddress",),
+            ),
+            (True, "vat@example.test"),
+        )
+
     def test_structured_address_rejects_unsafe_overflow(self) -> None:
         with self.assertRaisesRegex(ValueError, "Address line 1 超过 35"):
             build_address_answers({"premises": "X" * 36})
@@ -370,6 +393,11 @@ class ConfigTests(unittest.TestCase):
         sequence: list[str] = []
 
         class ReviewRunner(VatAutomation):
+            async def _final_review_change_items(
+                self, _page: object
+            ) -> list[dict[str, str]]:
+                return []
+
             async def _expand_final_review_sections(
                 self, _page: object, _heading: str
             ) -> None:
@@ -436,6 +464,99 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertLess(sequence.index("expanded"), sequence.index("screenshot"))
         self.assertLess(sequence.index("expanded"), sequence.index("pdf"))
+        self.assertIn("application-submitted", sequence)
+
+    def test_final_review_can_return_to_any_change_page_before_submission(self) -> None:
+        import asyncio
+        import tempfile
+
+        sequence: list[str] = []
+        decisions = iter(("edit", "submit"))
+
+        class ReviewRunner(VatAutomation):
+            async def _final_review_change_items(
+                self, _page: object
+            ) -> list[dict[str, str]]:
+                return [{"id": "change-0", "label": "Business email address"}]
+
+            async def _expand_final_review_sections(
+                self, _page: object, _heading: str
+            ) -> None:
+                sequence.append("expanded")
+
+            async def _snapshot(
+                self, _page: object, _heading: str, **_kwargs: object
+            ) -> Path:
+                sequence.append("screenshot")
+                return self.settings.artifacts_dir / "review.png"
+
+            async def _save_page_pdf(self, _page: object, _reason: str) -> Path:
+                sequence.append("pdf")
+                return self.settings.artifacts_dir / "review.pdf"
+
+            async def _audit(self, event: str, **_kwargs: object) -> None:
+                sequence.append(event)
+
+            async def _handle_remote_final_review_edit(
+                self,
+                _page: object,
+                target: str,
+                _changes: list[dict[str, str]],
+            ) -> str:
+                if target != "change-0":
+                    raise AssertionError(target)
+                sequence.append("remote-edit")
+                return "Check your answers after editing"
+
+            async def _click_named_action(self, _page: object, name: str) -> bool:
+                sequence.append(f"click:{name}")
+                return True
+
+            async def _verify_final_submission(
+                self, _page: object, _heading: str, _action: str
+            ) -> None:
+                sequence.append("application-submitted")
+
+        async def provider(info: dict[str, object]) -> dict[str, str]:
+            self.assertTrue(info["editable"])
+            decision = next(decisions)
+            sequence.append(f"decision:{decision}")
+            return {
+                "action": decision,
+                "target": "change-0" if decision == "edit" else "",
+            }
+
+        async def remote_provider(_info: dict[str, object]) -> dict[str, object]:
+            return {"answers": {}, "action": "Save and continue"}
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            runner = ReviewRunner(
+                Settings(
+                    start_url="https://example.test",
+                    profile_dir=base / "profile",
+                    artifacts_dir=base / "artifacts",
+                    answers={},
+                    pages=[],
+                ),
+                interactive=False,
+                final_review_provider=provider,
+                remote_edit_provider=remote_provider,
+            )
+            page = type(
+                "Page",
+                (),
+                {
+                    "url": (
+                        "https://www.tax.service.gov.uk/register-for-vat/"
+                        "check-confirm-answers"
+                    )
+                },
+            )()
+            asyncio.run(runner._handle_final_review(page, "Check your answers"))
+
+        self.assertEqual(sequence.count("expanded"), 2)
+        self.assertLess(sequence.index("remote-edit"), sequence.index("decision:submit"))
         self.assertIn("application-submitted", sequence)
 
     def test_final_review_expands_all_sections_before_archiving(self) -> None:
@@ -738,6 +859,88 @@ class ConfigTests(unittest.TestCase):
             combobox=False,
         )
         self.assertEqual(VatAutomation._locator(page, control), '[id="55"]')
+
+    def test_remote_edit_applies_text_and_radio_values(self) -> None:
+        import asyncio
+        import tempfile
+
+        class Locator:
+            def __init__(self) -> None:
+                self.filled = ""
+                self.checked = False
+
+            @property
+            def first(self) -> "Locator":
+                return self
+
+            async def fill(self, value: str) -> None:
+                self.filled = value
+
+            async def check(self) -> None:
+                self.checked = True
+
+        class Page:
+            def __init__(self) -> None:
+                self.locators = {
+                    '[id="business-email"]': Locator(),
+                    '[id="choice-yes"]': Locator(),
+                }
+
+            def locator(self, selector: str) -> Locator:
+                return self.locators[selector]
+
+        fields = [
+            {
+                "key": "businessEmailAddress",
+                "kind": "email",
+                "name": "businessEmailAddress",
+                "element_id": "business-email",
+                "combobox": False,
+                "options": [],
+            },
+            {
+                "key": "choice",
+                "kind": "radio",
+                "name": "choice",
+                "element_id": "choice-yes",
+                "options": [
+                    {
+                        "value": "true",
+                        "label": "Yes",
+                        "element_id": "choice-yes",
+                        "index": 0,
+                    }
+                ],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            runner = VatAutomation(
+                Settings(
+                    start_url="https://example.test",
+                    profile_dir=base / "profile",
+                    artifacts_dir=base / "artifacts",
+                    answers={},
+                    pages=[],
+                ),
+                interactive=False,
+            )
+            page = Page()
+            asyncio.run(
+                runner._apply_remote_edit_answers(
+                    page,
+                    fields,
+                    {
+                        "businessEmailAddress": "vat@example.test",
+                        "choice": "Yes",
+                    },
+                )
+            )
+        self.assertEqual(
+            page.locators['[id="business-email"]'].filled,
+            "vat@example.test",
+        )
+        self.assertTrue(page.locators['[id="choice-yes"]'].checked)
 
     def test_honesty_declaration_is_accepted_without_terminal_confirmation(self) -> None:
         import asyncio

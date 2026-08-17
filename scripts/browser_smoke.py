@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -26,7 +25,16 @@ async def run() -> None:
         pages=[PageRule(path_contains="about:blank")],
         headless=True,
     )
-    runner = VatAutomation(settings, interactive=False)
+    runner = VatAutomation(
+        settings,
+        interactive=False,
+        credentials={
+            "HMRC_MFA_METHOD": "Text message",
+            "HMRC_MFA_PHONE_IS_UK": "Yes",
+            "HMRC_MFA_PHONE_COUNTRY": "China",
+            "HMRC_MFA_PHONE": "00000000000",
+        },
+    )
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(channel="chrome", headless=True)
         page = await browser.new_page()
@@ -64,6 +72,91 @@ async def run() -> None:
 
         await page.set_content(
             """
+            <main>
+              <dl class="govuk-summary-list">
+                <div class="govuk-summary-list__row">
+                  <dt class="govuk-summary-list__key">Business email address</dt>
+                  <dd>old@example.test</dd>
+                  <dd><a href="#edit">Change <span>business email address</span></a></dd>
+                </div>
+              </dl>
+            </main>
+            """
+        )
+        changes = await runner._final_review_change_items(page)
+        assert changes == [
+            {"id": "change-0", "label": "Business email address"}
+        ]
+
+        await page.set_content(
+            """
+            <main><form>
+              <h1>What is the business email address?</h1>
+              <label for="business-email">Email address</label>
+              <input id="business-email" name="businessEmailAddress"
+                type="email" value="old@example.test">
+              <fieldset><legend>Use this address?</legend>
+                <input id="use-yes" name="useAddress" type="radio" value="true">
+                <label for="use-yes">Yes</label>
+                <input id="use-no" name="useAddress" type="radio" value="false" checked>
+                <label for="use-no">No</label>
+              </fieldset>
+              <button>Save and continue</button>
+            </form></main>
+            """
+        )
+        remote_form = await runner._remote_edit_form(page)
+        assert remote_form["actions"] == ["Save and continue"]
+        assert {field["key"] for field in remote_form["fields"]} == {
+            "businessEmailAddress", "useAddress",
+        }
+        await runner._apply_remote_edit_answers(
+            page,
+            remote_form["fields"],
+            {
+                "businessEmailAddress": "new@example.test",
+                "useAddress": "true",
+            },
+        )
+        assert await page.locator("#business-email").input_value() == "new@example.test"
+        assert await page.locator("#use-yes").is_checked()
+
+        ui_html = (
+            Path(__file__).resolve().parents[1]
+            / "vat_automation"
+            / "static"
+            / "index.html"
+        ).read_text(encoding="utf-8")
+        await page.set_content(ui_html)
+        await page.evaluate(
+            """
+            () => showReview({
+              available: true,
+              pdf: true,
+              editable: true,
+              changes: [{id:'change-3', label:'Business email address'}],
+              edit: {
+                available: true,
+                heading: 'What is the business email address?',
+                errors: [],
+                actions: ['Save and continue'],
+                fields: [{
+                  key:'businessEmailAddress', kind:'email', label:'Email address',
+                  value:'old@example.test', required:true, options:[]
+                }]
+              }
+            })
+            """
+        )
+        assert await page.locator("#review-change-target").input_value() == "change-3"
+        assert (
+            await page.locator('[data-remote-key="businessEmailAddress"]').input_value()
+            == "old@example.test"
+        )
+        assert await page.locator("#remote-edit-action").input_value() == "Save and continue"
+
+        await page.set_content(
+            """
             <main><ul>
               <li>Completed task <strong>Completed</strong><a href="#done">Done</a></li>
               <li>Next task <strong>Not started</strong><a href="#next">Next</a></li>
@@ -73,7 +166,6 @@ async def run() -> None:
         assert await runner._click_next_task(page)
         assert page.url.endswith("#next")
 
-        os.environ["HMRC_MFA_METHOD"] = "Text message"
         await page.set_content(
             """
             <main><form>
@@ -130,7 +222,6 @@ async def run() -> None:
             == "true"
         )
 
-        os.environ["HMRC_MFA_PHONE"] = "00000000000"
         await page.set_content(
             """
             <main><form>

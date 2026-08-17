@@ -27,7 +27,10 @@ FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "full_name": ("法人/负责人姓名", ("full name", "applicant name", "director name", "法人姓名", "姓名", "负责人姓名")),
     "first_name": ("名", ("first name", "given name", "名")),
     "last_name": ("姓", ("last name", "surname", "family name", "姓")),
-    "email": ("个人电子邮箱", ("email", "email address", "邮箱", "电子邮箱")),
+    "email": (
+        "个人电子邮箱",
+        ("email", "email address", "邮箱", "电子邮箱", "个人邮箱", "个人电子邮箱"),
+    ),
     "phone": ("个人手机号", ("phone", "mobile", "telephone number", "mobile number", "手机号码", "手机号", "联系电话")),
     "business_description": (
         "业务描述",
@@ -72,7 +75,13 @@ FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "company_registration_number": ("公司注册号/统一社会信用代码", ("公司注册号（统一社会信用代码）",)),
     "company_registration_country": ("公司注册国家", ("公司注册国家（请根据实际情况填写）",)),
     "company_incorporation_date": ("公司成立日期", ("公司成立日期",)),
-    "business_address": ("公司注册地址", ("公司注册地址（与Amazon或Ebay等在线平台注册地址一致，如地址是中文，则用对应英文 或拼音表示）",)),
+    "business_address": (
+        "公司注册地址",
+        (
+            "公司注册地址（与Amazon或Ebay等在线平台注册地址一致，如地址是中文，则用对应英文 或拼音表示）",
+            "公司注册地址（与Amazon或Ebay等在线平台注册地址一致，如地址是中文，则用对应英文或拼音表示）",
+        ),
+    ),
     "business_postcode": ("公司注册地址邮编", ("公司注册地址邮编",)),
     "business_type": ("营业类型", ("营业类型（贸易/物流/金融/数字货币交易/IT/咨询/旅游/建筑/房产/餐饮/法律 等）",)),
     "is_small_business": ("是否小微企业", ("公司是否属于小微企业",)),
@@ -309,7 +318,13 @@ def _parse_values(text: str) -> dict[str, str]:
     for key, (_, aliases) in FIELD_DEFINITIONS.items():
         for alias in sorted(aliases, key=len, reverse=True):
             label_patterns.append(
-                (re.compile(re.escape(alias) + r"\s*[:：]", re.IGNORECASE), key)
+                (
+                    re.compile(
+                        _flexible_label_pattern(alias) + r"\s*[:：]",
+                        re.IGNORECASE,
+                    ),
+                    key,
+                )
             )
 
     values: dict[str, str] = {}
@@ -351,6 +366,9 @@ def _derive_values(values: dict[str, str]) -> dict[str, str]:
     derived = dict(values)
     if derived.get("full_name"):
         derived["full_name"] = _normalize_latin_name(derived["full_name"])
+    for key in ("email", "vat_contact_email"):
+        if derived.get(key):
+            derived[key] = _normalize_email(derived[key])
     for key in ("phone", "business_phone"):
         if derived.get(key):
             derived[key] = _normalize_phone(derived[key])
@@ -385,6 +403,16 @@ def _normalize_phone(value: str) -> str:
     return re.sub(r"\D+", "", number_part)
 
 
+def _normalize_email(value: str) -> str:
+    """移除 Word 换行产生的邮箱内部空白，并丢弃模板尾注。"""
+    match = re.search(
+        r"[A-Z0-9._%+\-]+\s*@\s*(?:[A-Z0-9\-]+\s*\.\s*)+[A-Z]{2,}",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+", "", match.group(0) if match else value).strip()
+
+
 def _normalize_latin_name(value: str) -> str:
     """只保留法人姓名中的英文/拼音部分，不将中文姓名提交给 HMRC。"""
     return " ".join(re.findall(r"[A-Za-z][A-Za-z'\-]*", value))
@@ -392,19 +420,21 @@ def _normalize_latin_name(value: str) -> str:
 
 def _parse_business_address(raw: str, postcode: str, country: str) -> dict[str, str]:
     address = re.sub(r"\s+", " ", raw).strip(" ,")
-    english_start = re.search(
-        r"(?:\b(?:Room|Rm|Suite|Unit|Building|Bldg)\b|\bNo\.)",
-        address,
-        flags=re.IGNORECASE,
-    )
-    if english_start:
-        address = address[english_start.start():]
+    if re.search(r"[\u3400-\u9fff]", address):
+        english_start = re.search(
+            r"(?:\b\d+[A-Za-z]?\s*,\s*(?=(?:Building|Bldg)\b)|"
+            r"\b(?:Room|Rm|Suite|Unit|Building|Bldg)\b|\bNo\.)",
+            address,
+            flags=re.IGNORECASE,
+        )
+        if english_start:
+            address = address[english_start.start():]
     if not postcode:
         postcode_match = re.search(r"(?:^|\s)(\d{5,6})$", address)
         if postcode_match:
             postcode = postcode_match.group(1)
             address = address[:postcode_match.start()].strip(" ,")
-    parts = [part.strip() for part in address.split(",") if part.strip()]
+    parts = [part.strip() for part in re.split(r"[,，]", address) if part.strip()]
     locality_index = next(
         (
             index
@@ -418,7 +448,7 @@ def _parse_business_address(raw: str, postcode: str, country: str) -> dict[str, 
             index
             for index, part in enumerate(parts[:locality_index])
             if re.search(
-                r"(?:\bNo\.|\b(?:Road|Rd|Street|St|Avenue|Ave)\b)",
+                r"(?:\bNo\.|\b(?:Road|Rd|Street|St|Avenue|Ave|Community)\b)",
                 part,
                 re.I,
             )
@@ -451,6 +481,11 @@ def _parse_business_address(raw: str, postcode: str, country: str) -> dict[str, 
 
 def _field_key(value: str) -> str:
     return re.sub(r"[\W_]+", "", value.casefold(), flags=re.UNICODE)
+
+
+def _flexible_label_pattern(value: str) -> str:
+    """模板标签中的人工空格可有可无，其余字符仍按原文精确匹配。"""
+    return r"\s*".join(re.escape(part) for part in re.split(r"\s+", value.strip()))
 
 
 def _extract_project_code(filename: str) -> str:

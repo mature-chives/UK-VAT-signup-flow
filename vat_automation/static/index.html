@@ -43,7 +43,7 @@
     .status { border-left:6px solid var(--blue); padding:13px 15px; background:#eaf4fb; margin-bottom:18px; }
     .status.waiting_code { border-color:#f47738; background:#fff3e8; }
     .status.pausing,.status.paused { border-color:#ffdd00; background:#fff7bf; }
-    .status.reviewing { border-color:#4c2c92; background:#efeaf7; }
+    .status.reviewing,.status.editing { border-color:#4c2c92; background:#efeaf7; }
     .status.failed,.status.stopped { border-color:var(--red); background:#fbeaea; }
     .status.completed { border-color:var(--green); background:#e8f4ee; }
     #otp { display:none; padding:16px; border:2px solid #f47738; margin:18px 0; background:#fff9f3; }
@@ -113,6 +113,21 @@
       <h2>最终核对</h2>
       <div class="notice">请逐项核对下方存档。确认操作不可撤销：确认后程序会点击 HMRC 的“Confirm and submit”，正式提交 VAT 注册申请。</div>
       <a id="review-download" class="review-download" href="/api/final-review/pdf" download>下载完整 PDF 存档</a>
+      <div id="review-change-controls">
+        <label for="review-change-target">选择需要修改的信息</label>
+        <select id="review-change-target"></select>
+        <button id="review-edit" class="secondary" type="button">远程修改所选信息</button>
+        <div class="hint">系统会打开对应的 HMRC Change 页面，并把字段和当前值同步到这里，无需访问服务器上的 Chrome。</div>
+      </div>
+      <div id="remote-edit" style="display:none">
+        <h3 id="remote-edit-heading">远程修改 HMRC 信息</h3>
+        <ul id="remote-edit-errors" class="warnings"></ul>
+        <div id="remote-edit-fields" class="fields"></div>
+        <label for="remote-edit-action">下一步操作</label>
+        <select id="remote-edit-action"></select>
+        <button id="remote-edit-submit" type="button">保存修改并继续</button>
+        <div id="remote-edit-message" class="message"></div>
+      </div>
       <label><input id="review-submit-consent" type="checkbox" style="width:auto"> 我确认资料真实、完整且无误，并同意正式提交到 HMRC</label>
       <button id="review-confirm" class="danger" type="button" disabled>确认并提交到 HMRC</button>
       <div id="review-message" class="message"></div>
@@ -158,6 +173,10 @@ let extractedValues = {};
 let extractedLabels = {};
 let identityCount = 0;
 let extractionConfirmed = false;
+let currentStatus = 'idle';
+let reviewChangesSignature = '';
+let remoteEditSignature = '';
+let remoteEditInfo = null;
 
 async function post(url, body) {
   const isForm = body instanceof FormData;
@@ -319,8 +338,99 @@ $('review-confirm').addEventListener('click', async () => {
   }
 });
 
+$('review-edit').addEventListener('click', async () => {
+  setMessage('review-message', '');
+  const target = $('review-change-target').value;
+  if (!target) { setMessage('review-message', '当前没有可修改的 HMRC 项目。', 'error'); return; }
+  $('review-edit').disabled = true;
+  $('review-confirm').disabled = true;
+  const response = await post('/api/final-review/edit', {target});
+  const body = await response.json();
+  if (!response.ok) {
+    setMessage('review-message', body.detail || '进入修改模式失败', 'error');
+    $('review-edit').disabled = false;
+  } else {
+    $('review-submit-consent').checked = false;
+    setMessage('review-message', '正在读取所选 HMRC 修改页面，请稍候。', 'ok');
+  }
+});
+
+function renderRemoteEdit(info) {
+  if (!info || !info.available) {
+    $('remote-edit').style.display = 'none';
+    remoteEditInfo = null;
+    remoteEditSignature = '';
+    return;
+  }
+  const signature = JSON.stringify(info);
+  $('remote-edit').style.display = 'block';
+  if (signature === remoteEditSignature) return;
+  remoteEditSignature = signature;
+  remoteEditInfo = info;
+  $('remote-edit-heading').textContent = info.heading || '远程修改 HMRC 信息';
+  $('remote-edit-errors').innerHTML = (info.errors || []).map(item => `<li>${esc(item)}</li>`).join('');
+  $('remote-edit-fields').innerHTML = (info.fields || []).map((field, fieldIndex) => {
+    const key = esc(field.key || '');
+    const label = esc(field.label || field.key || '字段');
+    const required = field.required ? ' <span style="color:#d4351c">*</span>' : '';
+    const value = field.value;
+    if (field.kind === 'radio') {
+      const options = (field.options || []).map(option => {
+        const checked = String(option.value) === String(value) ? ' checked' : '';
+        return `<label style="font-weight:400"><input type="radio" name="remote-${fieldIndex}" data-remote-key="${key}" value="${esc(option.value)}" style="width:auto"${checked}> ${esc(option.label)}</label>`;
+      }).join('');
+      return `<fieldset class="wide"><legend>${label}${required}</legend>${options}</fieldset>`;
+    }
+    if (field.kind === 'checkbox-group') {
+      const selected = new Set((Array.isArray(value) ? value : []).map(String));
+      const options = (field.options || []).map(option => {
+        const checked = selected.has(String(option.value)) ? ' checked' : '';
+        return `<label style="font-weight:400"><input type="checkbox" data-remote-key="${key}" value="${esc(option.value)}" style="width:auto"${checked}> ${esc(option.label)}</label>`;
+      }).join('');
+      return `<fieldset class="wide"><legend>${label}${required}</legend>${options}</fieldset>`;
+    }
+    if (field.kind === 'checkbox') {
+      return `<div class="wide"><label style="font-weight:400"><input type="checkbox" data-remote-key="${key}" style="width:auto"${value ? ' checked' : ''}> ${label}${required}</label></div>`;
+    }
+    if (field.kind === 'select-one') {
+      const options = (field.options || []).map(option => `<option value="${esc(option.value)}"${String(option.value) === String(value) ? ' selected' : ''}>${esc(option.label)}</option>`).join('');
+      return `<div><label>${label}${required}</label><select data-remote-key="${key}">${options}</select></div>`;
+    }
+    if (field.kind === 'textarea') {
+      return `<div class="wide"><label>${label}${required}</label><textarea data-remote-key="${key}">${esc(value || '')}</textarea></div>`;
+    }
+    const inputType = ['email','tel','number','date','month'].includes(field.kind) ? field.kind : 'text';
+    return `<div><label>${label}${required}</label><input type="${inputType}" data-remote-key="${key}" value="${esc(value || '')}"></div>`;
+  }).join('');
+  $('remote-edit-action').innerHTML = (info.actions || []).map(action => `<option value="${esc(action)}">${esc(action)}</option>`).join('');
+  $('remote-edit-submit').disabled = !(info.actions || []).length;
+  setMessage('remote-edit-message', '');
+}
+
+$('remote-edit-submit').addEventListener('click', async () => {
+  if (!remoteEditInfo) return;
+  const answers = {};
+  for (const field of (remoteEditInfo.fields || [])) {
+    const controls = [...document.querySelectorAll('[data-remote-key]')].filter(item => item.dataset.remoteKey === field.key);
+    if (field.kind === 'radio') answers[field.key] = controls.find(item => item.checked)?.value || '';
+    else if (field.kind === 'checkbox-group') answers[field.key] = controls.filter(item => item.checked).map(item => item.value);
+    else if (field.kind === 'checkbox') answers[field.key] = !!controls[0]?.checked;
+    else answers[field.key] = controls[0]?.value ?? '';
+  }
+  $('remote-edit-submit').disabled = true;
+  setMessage('remote-edit-message', '正在应用到 HMRC…');
+  const response = await post('/api/final-review/edit/submit', {answers, action:$('remote-edit-action').value});
+  const body = await response.json();
+  if (!response.ok) {
+    setMessage('remote-edit-message', body.detail || '远程修改提交失败', 'error');
+    $('remote-edit-submit').disabled = false;
+  } else {
+    setMessage('remote-edit-message', '已发送，正在等待 HMRC 返回下一页。', 'ok');
+  }
+});
+
 $('review-submit-consent').addEventListener('change', () => {
-  $('review-confirm').disabled = !$('review-submit-consent').checked;
+  $('review-confirm').disabled = currentStatus !== 'reviewing' || !$('review-submit-consent').checked;
 });
 
 let isAdmin = false;
@@ -373,9 +483,22 @@ function showReview(info) {
     $('review').style.display = 'none';
     $('review-submit-consent').checked = false;
     $('review-confirm').disabled = true;
+    $('review-edit').disabled = true;
+    $('review-change-controls').style.display = 'none';
+    renderRemoteEdit(null);
     return;
   }
   $('review').style.display = 'block';
+  $('review-change-controls').style.display = info.editable ? 'block' : 'none';
+  const changes = info.changes || [];
+  const changesSignature = JSON.stringify(changes);
+  if (changesSignature !== reviewChangesSignature) {
+    const selected = $('review-change-target').value;
+    $('review-change-target').innerHTML = changes.map(item => `<option value="${esc(item.id)}">${esc(item.label)}</option>`).join('');
+    if (changes.some(item => item.id === selected)) $('review-change-target').value = selected;
+    reviewChangesSignature = changesSignature;
+  }
+  renderRemoteEdit(info.edit);
   if (info.pdf) {
     $('review-download').setAttribute('href', '/api/final-review/pdf');
     $('review-download').textContent = '下载完整 PDF 存档';
@@ -390,6 +513,7 @@ async function refresh() {
     const response = await fetch('/api/status');
     if (response.status === 401) { window.location.href = '/login'; return; }
     const state = await response.json();
+    currentStatus = state.status || 'idle';
     $('who').textContent = state.user ? '当前账号：' + state.user : '';
     if ($('config').value !== (state.config || '')) $('config').value = state.config || '';
     $('status').className = 'status ' + state.status; $('status').textContent = state.message;
@@ -398,12 +522,14 @@ async function refresh() {
     $('otp').style.display = state.status === 'waiting_code' ? 'block' : 'none';
     $('busy').style.display = state.busy_with ? 'block' : 'none';
     if (state.busy_with) $('busy').textContent = `当前有 ${state.busy_with} 的任务在运行，一次只能跑一个客户，请等待其结束。`;
-    $('start').disabled = ['starting','running','waiting_code','pausing','paused','reviewing'].includes(state.status) || !!state.busy_with;
+    $('start').disabled = ['starting','running','waiting_code','pausing','paused','reviewing','editing'].includes(state.status) || !!state.busy_with;
     $('pause').disabled = state.status !== 'running';
     $('continue').disabled = state.status !== 'paused';
     identityCount = state.identity_documents || identityCount;
     showAdmin(state.admin);
     showReview(state.final_review);
+    $('review-edit').disabled = currentStatus !== 'reviewing';
+    $('review-confirm').disabled = currentStatus !== 'reviewing' || !$('review-submit-consent').checked;
     $('events').innerHTML = [...state.events].reverse().map(item => `<li><b>${esc(item.event)}</b>${item.heading ? ' · '+esc(item.heading) : ''}${item.text ? ' · '+esc(item.text) : ''}</li>`).join('');
   } catch (_) {}
 }

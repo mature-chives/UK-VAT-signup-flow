@@ -61,7 +61,10 @@ ALLOWED_ENV_KEYS = {
     "HMRC_MFA_PHONE_IS_UK",
     "HMRC_MFA_PHONE_COUNTRY",
 }
-ACTIVE_STATES = {"starting", "running", "waiting_code", "pausing", "paused", "reviewing"}
+ACTIVE_STATES = {
+    "starting", "running", "waiting_code", "pausing", "paused", "reviewing",
+    "editing",
+}
 SESSION_COOKIE = "vat_session"
 CSRF_COOKIE = "vat_csrf"
 CSRF_HEADER = "x-csrf-token"
@@ -96,6 +99,15 @@ class FinalSubmitRequest(BaseModel):
     confirmed: bool = False
 
 
+class FinalEditRequest(BaseModel):
+    target: str = Field(min_length=1, max_length=64)
+
+
+class RemoteEditSubmitRequest(BaseModel):
+    answers: dict[str, str | bool | list[str]] = Field(default_factory=dict)
+    action: str = Field(default="", max_length=160)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=256)
@@ -128,11 +140,17 @@ class UserSession:
     pause_requested: threading.Event = field(default_factory=threading.Event)
     resume_event: threading.Event = field(default_factory=threading.Event)
     review_event: threading.Event = field(default_factory=threading.Event)
+    edit_event: threading.Event = field(default_factory=threading.Event)
     pending_extracted_values: dict[str, str] = field(default_factory=dict)
+    pending_edit_answers: dict[str, str | bool | list[str]] = field(default_factory=dict)
+    pending_edit_action: str = ""
     identity_documents: list[Path] = field(default_factory=list)
     active_identity_documents: list[Path] = field(default_factory=list)
     injected_rules: list[PageRule] = field(default_factory=list)
-    final_review: dict[str, str] = field(default_factory=dict)
+    final_review: dict[str, Any] = field(default_factory=dict)
+    final_review_edit: dict[str, Any] = field(default_factory=dict)
+    review_action: str = ""
+    review_target: str = ""
     thread: threading.Thread | None = None
 
 
@@ -186,6 +204,9 @@ class JobManager:
                     "available": bool(session.final_review),
                     "pdf": bool(session.final_review.get("pdf")),
                     "png": bool(session.final_review.get("png")),
+                    "editable": bool(session.final_review.get("editable")),
+                    "changes": list(session.final_review.get("changes", [])),
+                    "edit": dict(session.final_review_edit),
                 },
                 "user": session.username,
                 "busy_with": busy if busy and busy != session.username else "",
@@ -227,7 +248,13 @@ class JobManager:
             session.pause_requested.clear()
             session.resume_event.clear()
             session.review_event.clear()
+            session.edit_event.clear()
+            session.review_action = ""
+            session.review_target = ""
             session.pending_extracted_values = {}
+            session.pending_edit_answers = {}
+            session.pending_edit_action = ""
+            session.final_review_edit = {}
             while not session.code_queue.empty():
                 try:
                     session.code_queue.get_nowait()
@@ -285,10 +312,59 @@ class JobManager:
         with self._lock:
             if session.state["status"] != "reviewing":
                 raise RuntimeError("当前任务未处于待人工核对状态。")
+            session.review_action = "submit"
             session.state["message"] = (
                 "已收到人工提交确认，正在点击 HMRC 的 Confirm and submit"
             )
             session.review_event.set()
+
+    def request_final_review_edit(self, username: str, target: str) -> None:
+        session = self.session(username)
+        with self._lock:
+            if session.state["status"] != "reviewing":
+                raise RuntimeError("当前任务未处于待人工核对状态。")
+            if not session.final_review.get("editable"):
+                raise RuntimeError("HMRC 最终核对页没有可远程修改的 Change 项。")
+            changes = session.final_review.get("changes", [])
+            if target not in {str(item.get("id", "")) for item in changes}:
+                raise RuntimeError("选择的最终核对项目不存在或已经失效。")
+            session.review_action = "edit"
+            session.review_target = target
+            session.state["status"] = "editing"
+            session.state["message"] = "正在打开所选 HMRC 修改页面"
+            session.review_event.set()
+
+    def submit_remote_edit(
+        self, username: str, request: RemoteEditSubmitRequest
+    ) -> None:
+        session = self.session(username)
+        with self._lock:
+            if session.state["status"] != "editing":
+                raise RuntimeError("当前任务未处于远程修改状态。")
+            if not session.final_review_edit.get("available"):
+                raise RuntimeError("HMRC 修改表单尚未准备好，请稍后重试。")
+            fields = session.final_review_edit.get("fields", [])
+            allowed_keys = {str(item.get("key", "")) for item in fields}
+            if set(request.answers) - allowed_keys:
+                raise ValueError("提交内容包含当前 HMRC 页面不存在的字段。")
+            for field in fields:
+                if not field.get("required"):
+                    continue
+                key = str(field.get("key", ""))
+                value = request.answers.get(key)
+                if value is None or value == "" or value == []:
+                    raise ValueError(f"请填写必填项：{field.get('label') or key}")
+                if field.get("kind") == "checkbox" and value is not True:
+                    raise ValueError(f"请勾选必填项：{field.get('label') or key}")
+            actions = [str(item) for item in session.final_review_edit.get("actions", [])]
+            action = request.action or (actions[0] if actions else "")
+            if action not in actions:
+                raise ValueError("请选择当前 HMRC 页面提供的继续操作。")
+            session.pending_edit_answers = dict(request.answers)
+            session.pending_edit_action = action
+            session.final_review_edit = {"available": False}
+            session.state["message"] = "正在把远程修改应用到 HMRC 页面"
+            session.edit_event.set()
 
     def final_review_document(self, username: str, kind: str) -> Path | None:
         """返回最终复核产物的路径。路径只从服务端状态取，客户端无法指定。"""
@@ -355,7 +431,7 @@ class JobManager:
                 session.state["heading"] = str(record.get("heading", ""))
                 session.state["url"] = str(record.get("url", ""))
                 if session.state["status"] not in {
-                    "waiting_code", "pausing", "paused", "reviewing"
+                    "waiting_code", "pausing", "paused", "reviewing", "editing"
                 }:
                     session.state["status"] = "running"
                     session.state["message"] = "浏览器自动化正在运行"
@@ -400,12 +476,24 @@ class JobManager:
             session.state["message"] = "已应用修改后的资料，正在继续"
         return updates
 
-    async def _final_review(self, session: UserSession, info: dict[str, str]) -> None:
+    async def _final_review(
+        self, session: UserSession, info: dict[str, Any]
+    ) -> dict[str, str]:
         with self._lock:
+            changes = [
+                {"id": str(item.get("id", "")), "label": str(item.get("label", ""))}
+                for item in info.get("changes", [])
+                if item.get("id") and item.get("label")
+            ]
             session.final_review = {
                 "pdf": info.get("pdf", ""),
                 "png": info.get("screenshot", ""),
+                "editable": bool(info.get("editable") and changes),
+                "changes": changes,
             }
+            session.final_review_edit = {}
+            session.review_action = ""
+            session.review_target = ""
             session.state["status"] = "reviewing"
             session.state["url"] = info.get("url", "")
             session.state["heading"] = info.get("heading", "")
@@ -418,10 +506,51 @@ class JobManager:
         )
         with self._lock:
             session.review_event.clear()
+            action = session.review_action
+            target = session.review_target
+            session.review_action = ""
+            session.review_target = ""
         if not confirmed:
             raise AutomationStopped(
                 "最终复核等待超过 30 分钟，已自动结束并关闭浏览器。"
             )
+        if action not in {"submit", "edit"}:
+            raise AutomationStopped("最终复核未收到有效操作，已停止以避免误提交。")
+        return {"action": action, "target": target}
+
+    async def _remote_edit(
+        self, session: UserSession, info: dict[str, Any]
+    ) -> dict[str, Any]:
+        with self._lock:
+            session.edit_event.clear()
+            session.pending_edit_answers = {}
+            session.pending_edit_action = ""
+            session.final_review_edit = {
+                "available": True,
+                "heading": str(info.get("heading", "")),
+                "url": str(info.get("url", "")),
+                "fields": list(info.get("fields", [])),
+                "actions": list(info.get("actions", [])),
+                "errors": list(info.get("errors", [])),
+            }
+            session.state["status"] = "editing"
+            session.state["heading"] = str(info.get("heading", ""))
+            session.state["url"] = str(info.get("url", ""))
+            session.state["message"] = "请在网页中修改 HMRC 信息并继续"
+        submitted = await asyncio.to_thread(
+            session.edit_event.wait, FINAL_REVIEW_TIMEOUT_SECONDS
+        )
+        with self._lock:
+            session.edit_event.clear()
+            answers = dict(session.pending_edit_answers)
+            action = session.pending_edit_action
+            session.pending_edit_answers = {}
+            session.pending_edit_action = ""
+        if not submitted:
+            raise AutomationStopped(
+                "远程修改等待超过 30 分钟，已自动结束并关闭浏览器。"
+            )
+        return {"answers": answers, "action": action}
 
     def _set_terminal_state(self, session: UserSession, status: str, message: str) -> None:
         with self._lock:
@@ -545,6 +674,7 @@ class JobManager:
                     ),
                     pause_checkpoint_provider=pause_checkpoint,
                     final_review_provider=partial(self._final_review, session),
+                    remote_edit_provider=partial(self._remote_edit, session),
                     event_handler=partial(self._event, session),
                     audit_context={"user": session.username},
                 )
@@ -895,6 +1025,33 @@ async def final_review_confirm(
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "confirmed"}
+
+
+@app.post("/api/final-review/edit")
+async def final_review_edit(
+    request: FinalEditRequest,
+    username: str = Depends(current_user), _: None = Depends(require_csrf)
+) -> dict[str, str]:
+    try:
+        context.jobs().request_final_review_edit(username, request.target)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "editing"}
+
+
+@app.post("/api/final-review/edit/submit")
+async def final_review_edit_submit(
+    request: RemoteEditSubmitRequest,
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, str]:
+    try:
+        context.jobs().submit_remote_edit(username, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "applying"}
 
 
 @app.post("/api/parse-document")

@@ -92,10 +92,11 @@ class DocumentParserTests(unittest.TestCase):
             "出生日期：1990-02-03",
             "手机号码：8613900000000",
             "电子邮箱：personal@example.test",
+            "现居住地址以及邮编（需提供相应的2份证明材料）：510080 中文地址 201, Building 3, Jingxi Community, Baiyun District, Guangzhou City, Guangdong Province, China 510080",
             "公司名称（拼音或英文名称，要跟账号后台注册名称一致）：Local Trading Ltd",
             "公司注册号（统一社会信用代码）：ABC123 公司注册国家（请根据实际情况填写）：中国",
-            "公司注册地址（与Amazon或Ebay等在线平台注册地址一致，如地址是中文，则用对应英文 或拼音表示）：Room 8, Building 2, No. 9 Test Road, Demo District, Sample City, Zhejiang 公司注册地址邮编：310000",
-            "注册VAT的沟通邮箱：vat@example.test",
+            "公司注册地址（与Amazon或Ebay等在线平台注册地址一致，如地址是中文，则用对应英文或拼音表示）：501, 5th Floor, Building 2, No. 9 Test Road, Demo District, Sample City, Zhejiang 公司注册地址邮编：310000",
+            "注册VAT的沟通邮箱：vat@example. test",
             "生意联系电话：13800138000",
         ]
         table_rows = "".join(
@@ -120,7 +121,11 @@ class DocumentParserTests(unittest.TestCase):
         self.assertEqual(values["business_phone"], "13800138000")
         self.assertEqual(values["first_name"], "Ming")
         self.assertEqual(values["last_name"], "Li")
-        self.assertEqual(values["premises"], "Room 8, Building 2")
+        self.assertEqual(values["home_premises"], "201, Building 3")
+        self.assertEqual(values["home_street"], "Jingxi Community")
+        self.assertEqual(values["home_postcode"], "510080")
+        self.assertEqual(values["premises"], "501, 5th Floor, Building 2")
+        self.assertEqual(values["street"], "No. 9 Test Road")
         self.assertEqual(values["country"], "China")
 
     def test_chinese_legal_representative_name_is_removed(self) -> None:

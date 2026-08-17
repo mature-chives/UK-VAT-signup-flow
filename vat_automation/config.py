@@ -294,21 +294,26 @@ class Settings:
         heading: str,
         aliases: tuple[str, ...] = (),
     ) -> tuple[bool, Any]:
-        candidates: dict[str, Any] = dict(self.answers)
         matching_pages: list[PageRule] = []
         for page in self.pages:
             if page.matches(url, heading):
                 matching_pages.append(page)
-                candidates.update(page.answers)
         wanted = {normalize(label), *(normalize(alias) for alias in aliases if alias)}
         for group in ANSWER_ALIAS_GROUPS:
             normalized_group = {normalize(item) for item in group}
             if wanted & normalized_group:
                 wanted.update(normalized_group)
-        for key, value in candidates.items():
-            key_normalized = normalize(key)
-            if key_normalized in wanted:
-                return True, value
+
+        # 页面级答案必须整体优先于全局答案。不能先把字典合并后再按
+        # 插入顺序搜索：例如业务邮箱控件的 label 是 "Email address"，
+        # name 是 "businessEmailAddress"，全局个人邮箱会因此抢先命中。
+        for answers in (
+            *(page.answers for page in reversed(matching_pages)),
+            self.answers,
+        ):
+            for key, value in answers.items():
+                if normalize(key) in wanted:
+                    return True, value
         for page in reversed(matching_pages):
             if page.default_answer is not UNSET:
                 return True, page.default_answer

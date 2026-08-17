@@ -15,9 +15,11 @@ from vat_automation.web import (
     CSRF_HEADER,
     SESSION_COOKIE,
     ContinueRequest,
+    FinalEditRequest,
     FinalSubmitRequest,
     JobManager,
     LoginRequest,
+    RemoteEditSubmitRequest,
     SetupRequest,
     StartRequest,
     UserCreateRequest,
@@ -27,6 +29,8 @@ from vat_automation.web import (
     current_admin,
     current_user,
     delete_user,
+    final_review_edit,
+    final_review_edit_submit,
     final_review_pdf,
     final_review_confirm,
     index,
@@ -457,7 +461,7 @@ class JobManagerTests(WebAuthContext):
                 self.assertTrue(state["final_review"]["available"])
                 self.assertTrue(state["final_review"]["pdf"])
                 manager.confirm_final_review("alice")
-                await task
+                self.assertEqual(await task, {"action": "submit", "target": ""})
             finally:
                 # 同 pause 测试：失败时也放行等待线程，避免挂起整套测试。
                 session.review_event.set()
@@ -467,6 +471,94 @@ class JobManagerTests(WebAuthContext):
         self.assertEqual(manager.final_review_document("alice", "pdf"), artifact)
         # 其他用户拿不到不属于自己的最终复核文件。
         self.assertIsNone(manager.final_review_document("bob", "pdf"))
+
+    def test_final_review_edit_selects_remote_change_target(self) -> None:
+        manager = context.jobs()
+        session = manager.session("alice")
+
+        async def scenario() -> None:
+            task = asyncio.create_task(
+                manager._final_review(
+                    session,
+                    {
+                        "url": "https://example.test/check-your-answers",
+                        "heading": "Check your answers",
+                        "pdf": "",
+                        "screenshot": "",
+                        "editable": True,
+                        "changes": [
+                            {"id": "change-4", "label": "Business email address"}
+                        ],
+                    },
+                )
+            )
+            try:
+                for _ in range(50):
+                    await asyncio.sleep(0.005)
+                    if manager.snapshot("alice")["status"] == "reviewing":
+                        break
+                manager.request_final_review_edit("alice", "change-4")
+                self.assertEqual(
+                    await task, {"action": "edit", "target": "change-4"}
+                )
+                state = manager.snapshot("alice")
+                self.assertEqual(state["status"], "editing")
+                self.assertTrue(state["final_review"]["editable"])
+            finally:
+                session.review_event.set()
+                task.cancel()
+
+        asyncio.run(scenario())
+
+    def test_remote_edit_form_waits_for_web_answers(self) -> None:
+        manager = context.jobs()
+        session = manager.session("alice")
+
+        async def scenario() -> None:
+            task = asyncio.create_task(
+                manager._remote_edit(
+                    session,
+                    {
+                        "url": "https://example.test/business-email",
+                        "heading": "What is the business email address?",
+                        "fields": [
+                            {
+                                "key": "businessEmailAddress",
+                                "kind": "email",
+                                "label": "Email address",
+                                "value": "old@example.test",
+                            }
+                        ],
+                        "actions": ["Save and continue"],
+                        "errors": [],
+                    },
+                )
+            )
+            try:
+                for _ in range(50):
+                    await asyncio.sleep(0.005)
+                    edit = manager.snapshot("alice")["final_review"]["edit"]
+                    if edit.get("available"):
+                        break
+                manager.submit_remote_edit(
+                    "alice",
+                    RemoteEditSubmitRequest(
+                        answers={"businessEmailAddress": "new@example.test"},
+                        action="Save and continue",
+                    ),
+                )
+                self.assertEqual(
+                    await task,
+                    {
+                        "answers": {"businessEmailAddress": "new@example.test"},
+                        "action": "Save and continue",
+                    },
+                )
+            finally:
+                session.edit_event.set()
+                task.cancel()
+
+        asyncio.run(scenario())
 
     def test_final_review_endpoint_rejects_user_without_document(self) -> None:
         with self.assertRaises(HTTPException) as caught:
@@ -481,6 +573,28 @@ class JobManagerTests(WebAuthContext):
                 )
             )
         self.assertEqual(caught.exception.status_code, 400)
+
+    def test_final_review_edit_endpoint_requires_reviewing_state(self) -> None:
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(
+                final_review_edit(
+                    FinalEditRequest(target="change-0"), username="alice", _=None
+                )
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+
+    def test_remote_edit_submit_endpoint_requires_editing_state(self) -> None:
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(
+                final_review_edit_submit(
+                    RemoteEditSubmitRequest(
+                        answers={}, action="Save and continue"
+                    ),
+                    username="alice",
+                    _=None,
+                )
+            )
+        self.assertEqual(caught.exception.status_code, 409)
 
     def test_reinjected_rules_do_not_accumulate(self) -> None:
         manager = context.jobs()
@@ -500,6 +614,7 @@ class JobManagerTests(WebAuthContext):
         values = {
             "application_reference": "AB223322-UK-Example Ltd",
             "email": "person@example.test",
+            "vat_contact_email": "vat@example.test",
         }
         manager._apply_extracted_values(session, settings, values)
         first_count = len(settings.pages)
@@ -512,6 +627,24 @@ class JobManagerTests(WebAuthContext):
                 "Choose an application reference",
             ),
             (True, "AB223322-UK-Example Ltd"),
+        )
+        self.assertEqual(
+            settings.answer_for(
+                "Email address",
+                "https://example.test/register-for-vat/email-address",
+                "What is your email address?",
+                aliases=("email-address",),
+            ),
+            (True, "person@example.test"),
+        )
+        self.assertEqual(
+            settings.answer_for(
+                "Email address",
+                "https://example.test/register-for-vat/business-email",
+                "What is the business email address?",
+                aliases=("businessEmailAddress",),
+            ),
+            (True, "vat@example.test"),
         )
 
 
@@ -545,6 +678,9 @@ class EndpointTests(WebAuthContext):
         self.assertIn("/api/final-review/pdf", html)
         self.assertIn("确认并提交到 HMRC", html)
         self.assertIn("review-submit-consent", html)
+        self.assertIn("远程修改所选信息", html)
+        self.assertIn("/api/final-review/edit", html)
+        self.assertIn("/api/final-review/edit/submit", html)
         self.assertIn("{confirmed:true}", html)
         self.assertIn("下载完整 PDF 存档", html)
         self.assertNotIn("review-frame", html)

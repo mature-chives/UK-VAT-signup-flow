@@ -61,7 +61,12 @@ class VatAutomation:
         file_upload_provider: Callable[[str], Awaitable[str | None]] | None = None,
         file_uploads_remaining_provider: Callable[[], Awaitable[bool]] | None = None,
         pause_checkpoint_provider: Callable[[str, str], Awaitable[None]] | None = None,
-        final_review_provider: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        final_review_provider: Callable[
+            [dict[str, Any]], Awaitable[dict[str, Any] | str | None]
+        ] | None = None,
+        remote_edit_provider: Callable[
+            [dict[str, Any]], Awaitable[dict[str, Any]]
+        ] | None = None,
         event_handler: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
         audit_context: Mapping[str, str] | None = None,
     ) -> None:
@@ -77,6 +82,7 @@ class VatAutomation:
         self.file_uploads_remaining_provider = file_uploads_remaining_provider
         self.pause_checkpoint_provider = pause_checkpoint_provider
         self.final_review_provider = final_review_provider
+        self.remote_edit_provider = remote_edit_provider
         self.event_handler = event_handler
         # 多用户场景下用于在审计记录里标注操作人，不含任何凭据。
         self.audit_context = dict(audit_context or {})
@@ -463,7 +469,7 @@ class VatAutomation:
 
     async def _controls(self, page: Any) -> list[Control]:
         raw = await page.locator("main form input, main form select, main form textarea").evaluate_all(
-            """
+            r"""
             elements => elements.map(el => {
               const type = (el.type || el.tagName).toLowerCase();
               if (["hidden", "submit", "button", "reset"].includes(type)) return null;
@@ -732,27 +738,48 @@ class VatAutomation:
             )
         await self._audit("honesty-declaration-accepted", url=page.url)
 
-
     async def _handle_final_review(self, page: Any, heading: str) -> None:
         """存档最终复核页，等待人工确认后提交真实申请。"""
-        await self._expand_final_review_sections(page, heading)
-        screenshot = await self._snapshot(page, heading, reason="final-review")
-        document = await self._save_page_pdf(page, "final-review")
-        await self._audit(
-            "final-review-reached", url=page.url, pdf_saved=document is not None
-        )
         if self.final_review_provider is None:
             raise AutomationStopped(
                 "已到达最终复核/声明页面。安全策略禁止自动提交。"
             )
-        await self.final_review_provider(
-            {
-                "url": _safe_url(page.url),
-                "heading": heading,
-                "pdf": str(document) if document else "",
-                "screenshot": str(screenshot) if screenshot else "",
-            }
-        )
+
+        while True:
+            await self._expand_final_review_sections(page, heading)
+            screenshot = await self._snapshot(page, heading, reason="final-review")
+            document = await self._save_page_pdf(page, "final-review")
+            changes = await self._final_review_change_items(page)
+            await self._audit(
+                "final-review-reached", url=page.url, pdf_saved=document is not None
+            )
+            decision = await self.final_review_provider(
+                {
+                    "url": _safe_url(page.url),
+                    "heading": heading,
+                    "pdf": str(document) if document else "",
+                    "screenshot": str(screenshot) if screenshot else "",
+                    "editable": bool(changes),
+                    "changes": changes,
+                }
+            )
+            action = decision.get("action", "") if isinstance(decision, dict) else decision
+            if action in {None, "submit"}:
+                break
+            if action != "edit":
+                raise AutomationStopped("最终复核返回了无效操作，已停止以避免误提交。")
+            if self.remote_edit_provider is None:
+                raise AutomationStopped(
+                    "当前运行方式不支持网页远程修改 HMRC 信息。"
+                )
+            target = str(decision.get("target", "")) if isinstance(decision, dict) else ""
+            if not target:
+                raise AutomationStopped("未指定需要修改的最终核对项目。")
+            await self._audit("final-review-edit-requested", url=page.url)
+            heading = await self._handle_remote_final_review_edit(
+                page, target, changes
+            )
+
         await self._audit("final-review-confirmed", url=page.url)
         action = "Confirm and submit"
         if not await self._click_named_action(page, action):
@@ -763,6 +790,234 @@ class VatAutomation:
                 f"人工已确认，但最终复核页找不到按钮：{action}"
             )
         await self._verify_final_submission(page, heading, action)
+
+    async def _final_review_change_items(self, page: Any) -> list[dict[str, str]]:
+        """提取最终核对页可远程操作的 Change 链接，不向客户端暴露 URL。"""
+        raw = await page.locator("main a").evaluate_all(
+            r"""
+            links => links.map((link, index) => {
+              const visible = !!(link.offsetWidth || link.offsetHeight || link.getClientRects().length);
+              const text = (link.innerText || '').replace(/\s+/g, ' ').trim();
+              if (!visible || !/^change\b/i.test(text)) return null;
+              const row = link.closest('.govuk-summary-list__row, tr, li');
+              const key = row?.querySelector('.govuk-summary-list__key, th, dt');
+              const section = row?.closest('.govuk-accordion__section')
+                ?.querySelector('.govuk-accordion__section-heading');
+              const fieldLabel = (key?.innerText || text.replace(/^change\s*/i, ''))
+                .replace(/\s+/g, ' ').trim();
+              const sectionLabel = (section?.innerText || '').replace(/\s+/g, ' ').trim();
+              const label = sectionLabel && !fieldLabel.startsWith(sectionLabel)
+                ? `${sectionLabel} — ${fieldLabel}` : fieldLabel;
+              return {id: `change-${index}`, label: label || text};
+            }).filter(Boolean)
+            """
+        )
+        return [
+            {"id": str(item.get("id", "")), "label": str(item.get("label", ""))}
+            for item in raw
+            if item.get("id") and item.get("label")
+        ]
+
+    async def _handle_remote_final_review_edit(
+        self, page: Any, target: str, changes: list[dict[str, str]]
+    ) -> str:
+        if target not in {item["id"] for item in changes}:
+            raise AutomationStopped("选择的最终核对修改项目已经失效，请重新选择。")
+        match = re.fullmatch(r"change-(\d+)", target)
+        if match is None:
+            raise AutomationStopped("最终核对修改项目格式无效。")
+        link = page.locator("main a").nth(int(match.group(1)))
+        if not await link.count() or not await link.is_visible():
+            raise AutomationStopped("最终核对页上的 Change 链接已不可用。")
+        if not normalize(await link.inner_text()).startswith("change"):
+            raise AutomationStopped("最终核对页结构已变化，请重新生成核对项目。")
+        await link.click()
+        await page.wait_for_timeout(350)
+
+        for _ in range(40):
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+            except Exception:
+                pass
+            heading = await self._heading(page)
+            if self._is_final_page(page.url, heading):
+                await self._audit(
+                    "final-review-edit-completed", url=page.url, heading=heading
+                )
+                return heading
+
+            verification_input = await self._verification_code_input(page, heading)
+            if verification_input is not None:
+                await self._enter_verification_code(page, verification_input)
+                continue
+
+            form = await self._remote_edit_form(page)
+            errors = await self._validation_errors(page)
+            response = await self.remote_edit_provider(
+                {
+                    "url": _safe_url(page.url),
+                    "heading": heading,
+                    "fields": form["fields"],
+                    "actions": form["actions"],
+                    "errors": errors,
+                }
+            )
+            if not isinstance(response, dict):
+                raise AutomationStopped("远程修改未返回有效的网页操作。")
+            await self._apply_remote_edit_answers(
+                page, form["fields"], response.get("answers", {})
+            )
+            action = str(response.get("action", "")).strip()
+            if not action and form["actions"]:
+                action = form["actions"][0]
+            if action not in form["actions"]:
+                raise AutomationStopped("远程修改提交按钮无效，请重新进入修改。")
+            if any(normalize(marker) in normalize(action) for marker in FINAL_MARKERS):
+                raise AutomationStopped("远程修改阶段禁止触发最终提交按钮。")
+            if not await self._click_named_action(page, action):
+                raise AutomationStopped(f"远程修改页面找不到操作：{action}")
+            await page.wait_for_timeout(350)
+
+        raise AutomationStopped("远程修改经过 40 个页面仍未返回最终核对页。")
+
+    async def _remote_edit_form(self, page: Any) -> dict[str, Any]:
+        """把当前 HMRC 表单转换为可在 Web UI 中安全渲染的字段描述。"""
+        return await page.locator("main").evaluate(
+            r"""
+            main => {
+              const visible = el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+              const ownLabel = el => el.labels?.[0]?.innerText?.trim() || '';
+              const legend = el => el.closest('fieldset')?.querySelector('legend')?.innerText?.trim() || '';
+              const option = (el, index) => ({
+                value: el.value || '',
+                label: ownLabel(el) || el.value || `Option ${index + 1}`,
+                element_id: el.id || '',
+                index
+              });
+              const elements = [...main.querySelectorAll('form input, form select, form textarea')]
+                .filter(visible);
+              const seen = new Set();
+              const fields = [];
+              for (const el of elements) {
+                const kind = (el.type || el.tagName).toLowerCase();
+                if (['hidden','submit','button','reset','file'].includes(kind)) continue;
+                const key = el.name || el.id;
+                if (!key) continue;
+                const group = (kind === 'radio' || kind === 'checkbox') && el.name
+                  ? elements.filter(item => item.name === el.name && (item.type || '').toLowerCase() === kind)
+                  : [el];
+                const signature = `${kind}:${key}`;
+                if (seen.has(signature)) continue;
+                seen.add(signature);
+                const base = {
+                  key,
+                  name: el.name || '',
+                  element_id: el.id || '',
+                  label: legend(el) || ownLabel(el) || el.getAttribute('aria-label') || key,
+                  required: !!el.required || el.getAttribute('aria-required') === 'true'
+                    || kind === 'radio'
+                    || (kind !== 'checkbox' && !/optional/i.test(legend(el) || ownLabel(el))),
+                  combobox: el.getAttribute('role') === 'combobox' || el.hasAttribute('aria-autocomplete')
+                };
+                if (kind === 'radio') {
+                  fields.push({...base, kind: 'radio', value: group.find(item => item.checked)?.value || '', options: group.map(option)});
+                } else if (kind === 'checkbox' && group.length > 1) {
+                  fields.push({...base, kind: 'checkbox-group', value: group.filter(item => item.checked).map(item => item.value), options: group.map(option)});
+                } else if (kind === 'checkbox') {
+                  fields.push({...base, kind: 'checkbox', value: !!el.checked, options: []});
+                } else if (kind === 'select-one') {
+                  fields.push({...base, kind, value: el.value || '', options: [...el.options].filter(item => !item.disabled).map((item, index) => ({value:item.value, label:item.textContent.trim(), element_id:'', index}))});
+                } else {
+                  fields.push({...base, kind, value: el.value || '', options: []});
+                }
+              }
+              const actions = [...main.querySelectorAll('button, input[type="submit"], a.govuk-button')]
+                .filter(visible)
+                .map(el => (el.innerText || el.value || '').replace(/\s+/g, ' ').trim())
+                .filter((value, index, all) => value && all.indexOf(value) === index);
+              return {fields, actions};
+            }
+            """
+        )
+
+    async def _validation_errors(self, page: Any) -> list[str]:
+        errors = await page.locator(
+            ".govuk-error-summary a, .govuk-error-message"
+        ).all_inner_texts()
+        return list(dict.fromkeys(text.strip() for text in errors if text.strip()))
+
+    async def _apply_remote_edit_answers(
+        self,
+        page: Any,
+        fields: list[dict[str, Any]],
+        answers: Any,
+    ) -> None:
+        if not isinstance(answers, dict):
+            raise AutomationStopped("远程修改答案格式无效。")
+        field_map = {str(field.get("key", "")): field for field in fields}
+        unknown = set(map(str, answers)) - set(field_map)
+        if unknown:
+            raise AutomationStopped("远程修改包含当前页面不存在的字段。")
+
+        for key, raw_value in answers.items():
+            field = field_map[str(key)]
+            kind = str(field.get("kind", ""))
+            options = list(field.get("options", []))
+            if kind == "radio":
+                wanted = normalize(str(raw_value))
+                selected = next(
+                    (
+                        item for item in options
+                        if wanted in {normalize(str(item.get("value", ""))), normalize(str(item.get("label", "")))}
+                    ),
+                    None,
+                )
+                if selected is None:
+                    raise AutomationStopped(f"远程修改选项不存在：{key}")
+                await self._remote_option_locator(page, field, selected).check()
+                continue
+            if kind == "checkbox-group":
+                wanted_values = {
+                    str(item) for item in (raw_value if isinstance(raw_value, list) else [])
+                }
+                for option in options:
+                    locator = self._remote_option_locator(page, field, option)
+                    if str(option.get("value", "")) in wanted_values:
+                        await locator.check()
+                    else:
+                        await locator.uncheck()
+                continue
+
+            locator = self._remote_field_locator(page, field)
+            if kind == "checkbox":
+                if bool(raw_value):
+                    await locator.check()
+                else:
+                    await locator.uncheck()
+            elif kind == "select-one":
+                try:
+                    await locator.select_option(value=str(raw_value))
+                except Exception:
+                    await locator.select_option(label=str(raw_value))
+            else:
+                await locator.fill(str(raw_value))
+                if field.get("combobox"):
+                    await self._choose_autocomplete_option(page, str(raw_value))
+
+    @staticmethod
+    def _remote_field_locator(page: Any, field: dict[str, Any]) -> Any:
+        if field.get("element_id"):
+            return page.locator(f"[id={json.dumps(str(field['element_id']))}]")
+        return page.locator(f"[name={json.dumps(str(field.get('name', '')))}]").first
+
+    @staticmethod
+    def _remote_option_locator(
+        page: Any, field: dict[str, Any], option: dict[str, Any]
+    ) -> Any:
+        if option.get("element_id"):
+            return page.locator(f"[id={json.dumps(str(option['element_id']))}]")
+        group = page.locator(f"[name={json.dumps(str(field.get('name', '')))}]")
+        return group.nth(int(option.get("index", 0)))
 
     async def _expand_final_review_sections(self, page: Any, heading: str) -> None:
         """展开最终复核页的全部 accordion，确保截图和 PDF 包含答案。"""
