@@ -5,6 +5,7 @@ import io
 import json
 import re
 import zipfile
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -179,6 +180,26 @@ def extracted_home_address(values: dict[str, str]) -> dict[str, str]:
         for key, value in values.items()
         if key.startswith("home_") and value
     }
+
+
+def prepare_document_values(values: Mapping[str, str]) -> dict[str, str]:
+    """网页确认后的提取结果 → 填表资料袋。不含密码，也不写入流程 JSON。"""
+    bag = {
+        key: str(value).strip()
+        for key, value in values.items()
+        if str(value).strip()
+    }
+    bag.update(extracted_birth_date(bag))
+    identifier = (
+        bag.get("overseas_tax_identifier")
+        or bag.get("company_registration_number")
+        or ""
+    )
+    if identifier:
+        bag["overseas_tax_identifier"] = identifier
+        bag["tax-identifier-radio"] = "Yes"
+        bag["tax-identifier"] = identifier
+    return bag
 
 
 def extracted_birth_date(values: dict[str, str]) -> dict[str, str]:
@@ -374,6 +395,11 @@ def _derive_values(values: dict[str, str]) -> dict[str, str]:
             derived[key] = _normalize_phone(derived[key])
     if derived.get("business_type") and not derived.get("business_description"):
         derived["business_description"] = derived["business_type"]
+    # 当前业务：HMRC 海外税号就是中国统一社会信用代码。
+    if derived.get("company_registration_number") and not derived.get(
+        "overseas_tax_identifier"
+    ):
+        derived["overseas_tax_identifier"] = derived["company_registration_number"]
 
     name_parts = derived.get("full_name", "").split()
     if len(name_parts) >= 2:

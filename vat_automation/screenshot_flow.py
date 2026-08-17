@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date
 
 
@@ -9,6 +10,7 @@ def _rule(
     default: object | None = None,
     answers: dict[str, object] | None = None,
     action: str = "continue",
+    address: str | None = None,
 ) -> dict[str, object]:
     rule: dict[str, object] = {
         "match": {"path_contains": path},
@@ -17,13 +19,35 @@ def _rule(
     }
     if default is not None:
         rule["default_answer"] = default
+    if address is not None:
+        rule["address"] = address
     return rule
 
 
-def screenshot_page_rules(
-    *, suffix: str, birth_date: date
-) -> list[dict[str, object]]:
-    """截图所示海外企业 VAT 路径的测试答案，最终提交仍不自动化。"""
+def flow_global_answers() -> dict[str, str]:
+    """正式流程表的全局答案：流程字面量 + 申请人占位符。不含会撞车的 Email address。"""
+    return {
+        "Why do you want to register the business for VAT?": (
+            "It’s selling goods or services and needs or wants to charge VAT to customers"
+        ),
+        "Country": "China",
+        "Business name": "doc:business_name",
+        "Trading name": "doc:trading_name",
+        "Full name": "doc:full_name",
+        "What does the business do?": "doc:business_description",
+    }
+
+
+def flow_page_rules() -> list[dict[str, object]]:
+    """海外企业 VAT 路径的流程表。申请人真值用 doc: / env:，不写进本文件。"""
+    birth = {
+        "date-of-birth.day": "doc:date-of-birth.day",
+        "date-of-birth.month": "doc:date-of-birth.month",
+        "date-of-birth.year": "doc:date-of-birth.year",
+        "Day": "doc:date-of-birth.day",
+        "Month": "doc:date-of-birth.month",
+        "Year": "doc:date-of-birth.year",
+    }
     return [
         {
             "match": {
@@ -38,7 +62,7 @@ def screenshot_page_rules(
         _rule("/business-account/add-tax/vat/do-you-have-a-vat-number", default="No"),
         _rule(
             "/register-for-vat/application-reference",
-            answers={"value": f"TEST-{suffix}"},
+            answers={"value": "doc:application_reference"},
         ),
         _rule("/register-for-vat/honesty-declaration"),
         _rule("/check-if-you-can-register-for-vat/fixed-establishment", default="false"),
@@ -63,38 +87,61 @@ def screenshot_page_rules(
         _rule(
             "/overseas-identifier",
             answers={
-                "tax-identifier-radio": "Yes",
-                "tax-identifier": f"TEST-{suffix}-TAX",
+                "tax-identifier-radio": "doc:tax-identifier-radio",
+                "tax-identifier": "doc:overseas_tax_identifier",
             },
         ),
-        _rule("/overseas-tax-identifier-country", answers={"countryAutocomplete": "China", "country": "China"}),
+        _rule(
+            "/overseas-tax-identifier-country",
+            answers={"countryAutocomplete": "China", "country": "China"},
+        ),
         _rule(
             "/identify-your-sole-trader-business/",
             answers={
-                "first-name": "Alex",
-                "last-name": f"Tester{suffix}",
+                "first-name": "doc:first_name",
+                "First name": "doc:first_name",
+                "last-name": "doc:last_name",
+                "Last name": "doc:last_name",
+            },
+        ),
+        _rule("/date-of-birth", answers=birth),
+        _rule(
+            "/national-insurance-number",
+            action="skip:I do not have a National Insurance number",
+        ),
+        _rule("/register-for-vat/role-in-the-business", default="director"),
+        _rule("/register-for-vat/changed-name", default="false"),
+        _rule(
+            "/register-for-vat/home-address/international",
+            address="doc:home",
+        ),
+        _rule("/register-for-vat/current-address", default="true"),
+        _rule(
+            "/register-for-vat/email-address",
+            answers={"email-address": "doc:email", "Email address": "doc:email"},
+        ),
+        _rule(
+            "/register-for-vat/telephone-number",
+            answers={
+                "telephone-number": "doc:phone",
+                "Telephone number": "doc:phone",
+            },
+        ),
+        _rule("/register-for-vat/confirm-trading-name", default="true"),
+        _rule(
+            "/register-for-vat/principal-place-business/international",
+            address="doc:business",
+        ),
+        _rule(
+            "/register-for-vat/business-email",
+            answers={
+                "businessEmailAddress": "doc:vat_contact_email|env:HMRC_EMAIL",
             },
         ),
         _rule(
-            "/date-of-birth",
-            answers={
-                "date-of-birth.day": str(birth_date.day),
-                "date-of-birth.month": str(birth_date.month),
-                "date-of-birth.year": str(birth_date.year),
-                "Day": str(birth_date.day),
-                "Month": str(birth_date.month),
-                "Year": str(birth_date.year),
-            },
+            "/register-for-vat/business-telephone-number",
+            answers={"daytimePhone": "doc:business_phone|env:HMRC_MFA_PHONE"},
         ),
-        _rule("/national-insurance-number", action="skip:I do not have a National Insurance number"),
-        _rule("/register-for-vat/role-in-the-business", default="director"),
-        _rule("/register-for-vat/changed-name", default="false"),
-        _rule("/register-for-vat/current-address", default="true"),
-        _rule("/register-for-vat/email-address", answers={"email-address": "env:HMRC_EMAIL"}),
-        _rule("/register-for-vat/telephone-number", answers={"telephone-number": "env:HMRC_MFA_PHONE"}),
-        _rule("/register-for-vat/confirm-trading-name", default="true"),
-        _rule("/register-for-vat/business-email", answers={"businessEmailAddress": "env:HMRC_EMAIL"}),
-        _rule("/register-for-vat/business-telephone-number", answers={"daytimePhone": "env:HMRC_MFA_PHONE"}),
         _rule("/register-for-vat/business-has-website", default="false"),
         _rule("/register-for-vat/vat-correspondence-language", default="english"),
         _rule("/register-for-vat/contact-preference", default="email"),
@@ -131,6 +178,66 @@ def screenshot_page_rules(
         _rule("/register-for-vat/attachment-method", default="2"),
         _rule("/register-for-vat/file-upload/upload-document", action="stop"),
     ]
+
+
+def screenshot_page_rules(
+    *, suffix: str, birth_date: date
+) -> list[dict[str, object]]:
+    """测试夹具：同一路径覆盖为字面量假客户，并去掉依赖资料袋的地址页。"""
+    overlays: dict[str, dict[str, object]] = {
+        "/register-for-vat/application-reference": {"value": f"TEST-{suffix}"},
+        "/overseas-identifier": {
+            "tax-identifier-radio": "Yes",
+            "tax-identifier": f"TEST-{suffix}-TAX",
+        },
+        "/identify-your-sole-trader-business/": {
+            "first-name": "Alex",
+            "last-name": f"Tester{suffix}",
+        },
+        "/date-of-birth": {
+            "date-of-birth.day": str(birth_date.day),
+            "date-of-birth.month": str(birth_date.month),
+            "date-of-birth.year": str(birth_date.year),
+            "Day": str(birth_date.day),
+            "Month": str(birth_date.month),
+            "Year": str(birth_date.year),
+        },
+        "/register-for-vat/email-address": {"email-address": "env:HMRC_EMAIL"},
+        "/register-for-vat/telephone-number": {"telephone-number": "env:HMRC_MFA_PHONE"},
+        "/register-for-vat/business-email": {"businessEmailAddress": "env:HMRC_EMAIL"},
+        "/register-for-vat/business-telephone-number": {
+            "daytimePhone": "env:HMRC_MFA_PHONE"
+        },
+    }
+    skip_document_address = {
+        "/register-for-vat/home-address/international",
+        "/register-for-vat/principal-place-business/international",
+    }
+    result: list[dict[str, object]] = []
+    for rule in flow_page_rules():
+        match = rule.get("match", {})
+        path = str(match.get("path_contains", "")) if isinstance(match, dict) else ""
+        if path in skip_document_address:
+            continue
+        item = deepcopy(rule)
+        if path in overlays:
+            item["answers"] = dict(overlays[path])
+        result.append(item)
+    return result
+
+
+def build_flow_config() -> dict[str, object]:
+    return {
+        "start_url": "https://www.gov.uk/log-in-register-hmrc-online-services",
+        "profile_dir": ".browser-profile",
+        "artifacts_dir": "artifacts",
+        "browser_channel": "chrome",
+        "headless": False,
+        "allow_live_application": False,
+        "max_steps": 250,
+        "answers": flow_global_answers(),
+        "pages": flow_page_rules(),
+    }
 
 
 SPECIAL_HANDLED_PATHS = (

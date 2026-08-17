@@ -27,13 +27,16 @@ python -m playwright install chromium
 
 ## 配置
 
-复制示例文件，然后使用真实资料替换所有 `REPLACE_ME`：
+有两份配置，不要混用：
+
+- `vat-config.flow.json`：Web 用的流程表。只描述每一页读资料袋的哪个字段（`doc:`）或开户凭据（`env:`），不含客户姓名、邮箱、地址等真值。
+- `vat-config.example.json` / `vat-register`：命令行用的字面量配置。复制后把 `REPLACE_ME` 换成真实资料；测试假客户用 `scripts/generate_test_config.py`。
 
 ```bash
 cp vat-config.example.json vat-config.json
 ```
 
-`answers` 是跨页面的标签到答案映射；`pages` 可按 URL 路径或页面标题提供覆盖值。推荐优先使用截图或实际页面上完整的英文标签作为 key。单选题的值必须等于页面显示的选项文本，文件上传必须使用绝对路径。
+`answers` 是跨页面的标签到答案映射；`pages` 可按 URL 路径或页面标题提供覆盖值。推荐优先使用截图或实际页面上完整的英文标签作为 key。单选题的值必须等于页面显示的选项文本，文件上传必须使用绝对路径。流程表里的 `doc:first_name`、`doc:vat_contact_email|env:HMRC_EMAIL` 在填表时才解析；`|` 表示从左到右，空值跳过。
 
 示例：
 
@@ -138,7 +141,7 @@ vat-register --config vat-config.test.json
 
 ```bash
 .venv/bin/python -m pip install -e .
-.venv/bin/vat-web --config vat-config.json
+.venv/bin/vat-web --config vat-config.flow.json
 ```
 
 还没有账号时，终端会打印一个仅本次启动有效的初始化码，浏览器打开后会自动进入“创建管理员账号”页面，输入初始化码即可完成初始化。管理员登录后可在页面右侧“账号管理”区块为同事添加账号、重置密码或删除账号（首个账号自动是管理员，最后一个管理员不可删除）。命令行方式 `vat-web-user add/remove/list` 仍然可用。
@@ -147,7 +150,7 @@ vat-register --config vat-config.test.json
 
 - 上传 PDF、DOCX、XLSX、TXT、JSON、CSV 或 TSV 资料文档，在本地提取 VAT 字段；
 - 只返回英国 VAT 注册会使用的字段，忽略签证、前任会计师、平台链接等无关内容；
-- 在页面检查和修正提取结果，再将其合并到自动化配置；
+- 在页面检查和修正提取结果，确认后作为资料袋交给自动化（不写回 JSON）；
 - 输入开户邮箱、密码和 MFA 手机号；
 - 一次上传三份身份证明，后续按 HMRC 页面顺序自动上传；
 - 默认创建新登录信息，手机号国家为 `China`，英国手机号为 `No`；
@@ -155,7 +158,7 @@ vat-register --config vat-config.test.json
 - 启动可见的本地 Chrome 自动化；
 - 在网页中输入邮箱验证码和短信验证码；
 - 在安全页面边界暂停自动化，修改并重新确认资料后从当前 HMRC 页面继续；
-- 到达 `Check your answers` 时先点击 `Show all sections` 展开全部答案，再保存整页 PDF（失败时保存整页截图）供下载核对；如需修改，网页会列出 HMRC 的全部 `Change` 项，并把所选修改页的字段、当前值、选项和校验错误同步到远程网页，用户保存后自动继续并重新生成最终核对存档；逐项核对并明确勾选确认后，程序点击 `Confirm and submit`；
+- 到达 `Check your answers` 时先点击 `Show all sections` 展开全部答案，再保存整页 PDF（失败时保存整页截图）供下载核对；如需修改，网页会列出 HMRC 的全部 `Change` 项，并把所选修改页的字段、当前值、选项和校验错误同步到远程网页；保存后经申请进度页回到最终核对并重新存档，不继续走整份注册；逐项核对并明确勾选确认后，程序点击 `Confirm and submit`；
 - 查看当前 HMRC 页面、运行状态和最近操作；
 - 显示安全停止或失败原因。
 
@@ -168,7 +171,7 @@ Web UI 默认只绑定 `127.0.0.1`，一次只运行一个任务。配置文件�
 指定其他端口或不自动打开浏览器：
 
 ```bash
-.venv/bin/vat-web --config vat-config.json --port 9000 --no-open
+.venv/bin/vat-web --config vat-config.flow.json --port 9000 --no-open
 ```
 
 ## 局域网多人使用
@@ -178,7 +181,7 @@ Web UI 默认只绑定 `127.0.0.1`，一次只运行一个任务。配置文件�
 1. 以局域网地址启动。程序会自动生成自签 TLS 证书（`certs/`，SAN 包含本机局域网 IP 和 `.local` 主机名），并打印同事可访问的地址：
 
    ```bash
-   .venv/bin/vat-web --config vat-config.json --host 0.0.0.0
+   .venv/bin/vat-web --config vat-config.flow.json --host 0.0.0.0
    ```
 
    无法准备证书时会拒绝启动。也可用 `--ssl-certfile` / `--ssl-keyfile` 指定自备证书（例如 mkcert 签发）。`--insecure-http` 可跳过 TLS，但登录密码、HMRC 凭据、验证码和客户身份证件都会明文过网，不要在正式使用时开启。
@@ -202,6 +205,7 @@ Web UI 默认只绑定 `127.0.0.1`，一次只运行一个任务。配置文件�
 ```bash
 python -m compileall -q vat_automation tests
 python -m unittest discover -s tests -v
+python scripts/check_flow_coverage.py vat-config.flow.json
 python scripts/check_flow_coverage.py vat-config.test.json
 ```
 

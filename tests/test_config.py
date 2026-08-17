@@ -8,12 +8,14 @@ from vat_automation.config import (
     Settings,
     build_address_answers,
     build_international_address_answers,
+    is_placeholder_chain,
     load_settings,
     normalize,
     resolve_dynamic_value,
     uk_next_month_first,
     vat_return_stagger_for_registration_month,
 )
+from vat_automation.document_parser import prepare_document_values
 from vat_automation.runner import (
     SAFE_ACTIONS,
     AutomationStopped,
@@ -21,7 +23,11 @@ from vat_automation.runner import (
     VatAutomation,
     _safe_url,
 )
-from vat_automation.screenshot_flow import SCREENSHOT_PATHS, screenshot_page_rules
+from vat_automation.screenshot_flow import (
+    SCREENSHOT_PATHS,
+    build_flow_config,
+    screenshot_page_rules,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -209,6 +215,152 @@ class ConfigTests(unittest.TestCase):
             (True, "vat@example.test"),
         )
 
+    def test_placeholder_chain_rejects_ordinary_text(self) -> None:
+        self.assertTrue(is_placeholder_chain("doc:first_name"))
+        self.assertTrue(is_placeholder_chain("doc:vat_contact_email|env:HMRC_EMAIL"))
+        self.assertFalse(is_placeholder_chain("It’s selling goods or services"))
+        self.assertFalse(is_placeholder_chain("doc:first_name|please use this"))
+
+    def test_document_bag_fills_name_and_keeps_business_email_separate(self) -> None:
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={"Email address": "doc:email", "First name": "Alex"},
+            pages=[
+                PageRule(
+                    path_contains="/identify-your-sole-trader-business/",
+                    answers={
+                        "first-name": "doc:first_name",
+                        "last-name": "doc:last_name",
+                    },
+                ),
+                PageRule(
+                    path_contains="/register-for-vat/email-address",
+                    answers={"email-address": "doc:email"},
+                ),
+                PageRule(
+                    path_contains="/register-for-vat/business-email",
+                    answers={
+                        "businessEmailAddress": "doc:vat_contact_email|env:HMRC_EMAIL",
+                    },
+                ),
+            ],
+        )
+        bag = prepare_document_values(
+            {
+                "first_name": "Ming",
+                "last_name": "Li",
+                "email": "person@example.test",
+                "vat_contact_email": "vat@example.test",
+            }
+        )
+        runner = VatAutomation(
+            settings,
+            credentials={"HMRC_EMAIL": "login@hmrc.test"},
+            document_values=bag,
+        )
+
+        def resolved(
+            label: str, url: str, heading: str, aliases: tuple[str, ...] = ()
+        ) -> object:
+            found, value = settings.answer_for(
+                label, url, heading, aliases, document_values=bag
+            )
+            self.assertTrue(found)
+            return runner._resolve_value(value)
+
+        name_url = (
+            "https://example.test/identify-your-sole-trader-business/abc/full-name"
+        )
+        self.assertEqual(
+            resolved("First name", name_url, "What is your name?", ("first-name",)),
+            "Ming",
+        )
+        self.assertEqual(
+            resolved("Last name", name_url, "What is your name?", ("last-name",)),
+            "Li",
+        )
+        self.assertEqual(
+            resolved(
+                "Email address",
+                "https://example.test/register-for-vat/business-email",
+                "What is the business email address?",
+                ("businessEmailAddress",),
+            ),
+            "vat@example.test",
+        )
+        self.assertEqual(
+            resolved(
+                "Email address",
+                "https://example.test/register-for-vat/email-address",
+                "What is your email address?",
+                ("email-address",),
+            ),
+            "person@example.test",
+        )
+
+    def test_missing_vat_contact_email_falls_back_to_login_email(self) -> None:
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={},
+            pages=[
+                PageRule(
+                    path_contains="/register-for-vat/business-email",
+                    answers={
+                        "businessEmailAddress": "doc:vat_contact_email|env:HMRC_EMAIL",
+                    },
+                )
+            ],
+        )
+        bag = prepare_document_values({"email": "person@example.test"})
+        runner = VatAutomation(
+            settings,
+            credentials={"HMRC_EMAIL": "login@hmrc.test"},
+            document_values=bag,
+        )
+        found, value = settings.answer_for(
+            "Email address",
+            "https://example.test/register-for-vat/business-email",
+            "What is the business email address?",
+            ("businessEmailAddress",),
+            document_values=bag,
+        )
+        self.assertTrue(found)
+        self.assertEqual(runner._resolve_value(value), "login@hmrc.test")
+
+    def test_home_address_source_expands_from_document_bag(self) -> None:
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={"Address line 1": "JSON Room"},
+            pages=[
+                PageRule(
+                    path_contains="/register-for-vat/home-address/international",
+                    address_source="doc:home",
+                )
+            ],
+        )
+        bag = prepare_document_values(
+            {
+                "home_premises": "201, Building 3",
+                "home_street": "Jingxi Community",
+                "home_city": "Guangzhou City",
+                "home_country": "China",
+                "home_postcode": "510080",
+            }
+        )
+        found, value = settings.answer_for(
+            "Address line 1",
+            "https://example.test/register-for-vat/home-address/international",
+            "What is your home address?",
+            document_values=bag,
+        )
+        self.assertEqual((found, value), (True, "201, Building 3"))
+
     def test_structured_address_rejects_unsafe_overflow(self) -> None:
         with self.assertRaisesRegex(ValueError, "Address line 1 超过 35"):
             build_address_answers({"premises": "X" * 36})
@@ -360,6 +512,39 @@ class ConfigTests(unittest.TestCase):
             "continue",
         )
         self.assertGreaterEqual(len(SCREENSHOT_PATHS), 80)
+
+    def test_committed_flow_config_uses_placeholders_not_applicant_literals(self) -> None:
+        import json
+        import tempfile
+
+        flow_path = Path(__file__).resolve().parents[1] / "vat-config.flow.json"
+        raw = json.loads(flow_path.read_text(encoding="utf-8"))
+        blob = json.dumps(raw, ensure_ascii=False)
+        self.assertIn("doc:first_name", blob)
+        self.assertIn("doc:vat_contact_email|env:HMRC_EMAIL", blob)
+        self.assertIn("doc:home", blob)
+        self.assertNotIn("Alex", blob)
+        self.assertNotIn("Tester", blob)
+        self.assertNotIn("@example.com", blob)
+        with tempfile.TemporaryDirectory() as workspace:
+            copy = Path(workspace) / "vat-config.flow.json"
+            copy.write_text(flow_path.read_text(encoding="utf-8"), encoding="utf-8")
+            settings = load_settings(copy)
+        self.assertEqual(
+            settings.answer_for(
+                "First name",
+                "https://example.test/identify-your-sole-trader-business/id/full-name",
+                "What is your name?",
+            ),
+            (True, "doc:first_name"),
+        )
+        home = next(
+            page
+            for page in settings.pages
+            if "home-address/international" in page.path_contains
+        )
+        self.assertEqual(home.address_source, "doc:home")
+        self.assertEqual(build_flow_config()["answers"]["Business name"], "doc:business_name")
 
     def test_final_review_is_always_detected(self) -> None:
         settings = Settings(
@@ -559,6 +744,118 @@ class ConfigTests(unittest.TestCase):
         self.assertLess(sequence.index("remote-edit"), sequence.index("decision:submit"))
         self.assertIn("application-submitted", sequence)
 
+    def test_skip_edit_action_recognizes_missing_utr_link(self) -> None:
+        from vat_automation.runner import is_skip_edit_action
+
+        self.assertTrue(
+            is_skip_edit_action("I do not have the company's UTR number")
+        )
+        self.assertTrue(
+            is_skip_edit_action("I do not have the company’s UTR number")
+        )
+        self.assertFalse(is_skip_edit_action("Continue"))
+        self.assertFalse(is_skip_edit_action("Save and continue"))
+
+    def test_final_review_task_link_ignores_locked_and_other_tasks(self) -> None:
+        self.assertTrue(
+            VatAutomation._is_final_review_task_link(
+                "/register-for-vat/check-confirm-answers",
+                "Check your answers",
+            )
+        )
+        self.assertFalse(
+            VatAutomation._is_final_review_task_link(
+                "/register-for-vat/check-confirm-answers",
+                "Check your answers",
+                "Check your answers Cannot start yet",
+            )
+        )
+        self.assertFalse(
+            VatAutomation._is_final_review_task_link(
+                "/register-for-vat/business-email",
+                "Business email address",
+            )
+        )
+        self.assertEqual(
+            VatAutomation._application_progress_url(
+                "https://www.tax.service.gov.uk/register-for-vat/business-email"
+            ),
+            "https://www.tax.service.gov.uk/register-for-vat/application-progress",
+        )
+
+    def test_remote_edit_returns_via_progress_after_save(self) -> None:
+        import asyncio
+        import tempfile
+
+        sequence: list[str] = []
+
+        class Page:
+            def __init__(self) -> None:
+                self.url = (
+                    "https://www.tax.service.gov.uk/register-for-vat/"
+                    "business-email"
+                )
+                self.heading = "What is the business email address?"
+
+            async def wait_for_load_state(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def wait_for_timeout(self, _milliseconds: int) -> None:
+                return None
+
+            async def goto(self, url: str, **_kwargs: object) -> None:
+                sequence.append(f"goto:{url}")
+                self.url = url
+                if url.endswith("/application-progress"):
+                    self.heading = "Your application progress"
+                else:
+                    self.heading = "Check your answers"
+
+        class ReviewRunner(VatAutomation):
+            async def _heading(self, current: Page) -> str:
+                return current.heading
+
+            async def _validation_errors(self, _page: object) -> list[str]:
+                return []
+
+            async def _click_final_review_task(self, current: Page) -> bool:
+                sequence.append("click-final-review-task")
+                current.url = (
+                    "https://www.tax.service.gov.uk/register-for-vat/"
+                    "check-confirm-answers"
+                )
+                current.heading = "Check your answers"
+                return True
+
+            async def _audit(self, event: str, **_kwargs: object) -> None:
+                sequence.append(event)
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            runner = ReviewRunner(
+                Settings(
+                    start_url="https://example.test",
+                    profile_dir=base / "profile",
+                    artifacts_dir=base / "artifacts",
+                    answers={},
+                    pages=[],
+                ),
+                interactive=False,
+            )
+            returned = asyncio.run(
+                runner._return_to_final_review_from_edit(
+                    Page(),
+                    "https://www.tax.service.gov.uk/register-for-vat/"
+                    "check-confirm-answers",
+                )
+            )
+        self.assertTrue(returned)
+        self.assertIn(
+            "goto:https://www.tax.service.gov.uk/register-for-vat/application-progress",
+            sequence,
+        )
+        self.assertIn("click-final-review-task", sequence)
+
     def test_final_review_expands_all_sections_before_archiving(self) -> None:
         import asyncio
         import tempfile
@@ -716,6 +1013,20 @@ class ConfigTests(unittest.TestCase):
             {"HMRC_EMAIL": "real-person@example.com"}
         )
         self.assertIn("检测到示例邮箱域名 example.com", warnings)
+
+    def test_live_application_warnings_scan_document_bag_not_placeholders(self) -> None:
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={"Business name": "doc:business_name"},
+            pages=[],
+        )
+        self.assertEqual(settings.live_application_warnings(), [])
+        warnings = settings.live_application_warnings(
+            document_values={"business_name": "Northstar Trading"}
+        )
+        self.assertIn("检测到 Northstar 测试标记", warnings)
 
     def test_safe_url_redacts_auth_token_and_query(self) -> None:
         self.assertEqual(

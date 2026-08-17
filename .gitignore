@@ -4,6 +4,7 @@
 artifacts*/
 vat-config*.json
 !vat-config.example.json
+!vat-config.flow.json
 users.json
 certs/
 .env

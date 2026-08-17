@@ -1,0 +1,478 @@
+{
+  "start_url": "https://www.gov.uk/log-in-register-hmrc-online-services",
+  "profile_dir": ".browser-profile",
+  "artifacts_dir": "artifacts",
+  "browser_channel": "chrome",
+  "headless": false,
+  "allow_live_application": true,
+  "max_steps": 250,
+  "answers": {
+    "Why do you want to register the business for VAT?": "It’s selling goods or services and needs or wants to charge VAT to customers",
+    "Country": "China",
+    "Business name": "doc:business_name",
+    "Trading name": "doc:trading_name",
+    "Full name": "doc:full_name",
+    "What does the business do?": "doc:business_description"
+  },
+  "pages": [
+    {
+      "match": {
+        "path_contains": "/business-account",
+        "heading_contains": "Add a tax to your account"
+      },
+      "answers": {},
+      "default_answer": "VAT",
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/business-account/add-tax/vat"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "VAT"
+    },
+    {
+      "match": {
+        "path_contains": "/business-account/add-tax/vat/do-you-have-a-vat-number"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "No"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/application-reference"
+      },
+      "answers": {
+        "value": "doc:application_reference"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/honesty-declaration"
+      },
+      "answers": {},
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/fixed-establishment"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/business-entity-overseas"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "55"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/agricultural-flat-rate"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/business-activities-next-12-months"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/whos-the-application-for"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "own"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/registration-reason"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "selling-goods-and-services"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/made-or-intend-to-make-taxable-supplies"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "true"
+    },
+    {
+      "match": {
+        "path_contains": "/check-if-you-can-register-for-vat/date-of-taxable-supplies-in-uk"
+      },
+      "answers": {
+        "thresholdTaxableSuppliesDate.day": "date:uk-next-month-first.day",
+        "thresholdTaxableSuppliesDate.month": "date:uk-next-month-first.month",
+        "thresholdTaxableSuppliesDate.year": "date:uk-next-month-first.year",
+        "Day": "date:uk-next-month-first.day",
+        "Month": "date:uk-next-month-first.month",
+        "Year": "date:uk-next-month-first.year"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/non-uk-company-utr"
+      },
+      "answers": {},
+      "action": "skip:I do not have the company's UTR number"
+    },
+    {
+      "match": {
+        "path_contains": "/overseas-identifier"
+      },
+      "answers": {
+        "tax-identifier-radio": "doc:tax-identifier-radio",
+        "tax-identifier": "doc:overseas_tax_identifier"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/overseas-tax-identifier-country"
+      },
+      "answers": {
+        "countryAutocomplete": "China",
+        "country": "China"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/identify-your-sole-trader-business/"
+      },
+      "answers": {
+        "first-name": "doc:first_name",
+        "First name": "doc:first_name",
+        "last-name": "doc:last_name",
+        "Last name": "doc:last_name"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/date-of-birth"
+      },
+      "answers": {
+        "date-of-birth.day": "doc:date-of-birth.day",
+        "date-of-birth.month": "doc:date-of-birth.month",
+        "date-of-birth.year": "doc:date-of-birth.year",
+        "Day": "doc:date-of-birth.day",
+        "Month": "doc:date-of-birth.month",
+        "Year": "doc:date-of-birth.year"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/national-insurance-number"
+      },
+      "answers": {},
+      "action": "skip:I do not have a National Insurance number"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/role-in-the-business"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "director"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/changed-name"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/home-address/international"
+      },
+      "answers": {},
+      "action": "continue",
+      "address": "doc:home"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/current-address"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "true"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/email-address"
+      },
+      "answers": {
+        "email-address": "doc:email",
+        "Email address": "doc:email"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/telephone-number"
+      },
+      "answers": {
+        "telephone-number": "doc:phone",
+        "Telephone number": "doc:phone"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/confirm-trading-name"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "true"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/principal-place-business/international"
+      },
+      "answers": {},
+      "action": "continue",
+      "address": "doc:business"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/business-email"
+      },
+      "answers": {
+        "businessEmailAddress": "doc:vat_contact_email|env:HMRC_EMAIL"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/business-telephone-number"
+      },
+      "answers": {
+        "daytimePhone": "doc:business_phone|env:HMRC_MFA_PHONE"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/business-has-website"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/vat-correspondence-language"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "english"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/contact-preference"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "email"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/land-and-property"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/search-standard-industry-classification-codes"
+      },
+      "answers": {
+        "sicSearch": "47910"
+      },
+      "action": "Search"
+    },
+    {
+      "match": {
+        "path_contains": "/check-confirm-standard-industry-classification-codes"
+      },
+      "answers": {},
+      "action": "Confirm and continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/other-business-involvements"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/imports-or-exports"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "true"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/apply-for-eori"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "true"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/standard-rate-turnover"
+      },
+      "answers": {
+        "standardRateSupplies": "10000"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/reduced-rate-turnover"
+      },
+      "answers": {
+        "reducedRateSupplies": "0"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/zero-rated-turnover"
+      },
+      "answers": {
+        "zeroRatedSupplies": "0"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/total-taxable-turnover"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "true"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/sell-or-move-nip"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/receive-goods-nip"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/claim-vat-refunds"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/send-goods-overseas"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/storing-goods-for-dispatch"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "UK"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/using-fulfilment-warehouse"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/how-often-submit-returns"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "quarterly"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/submit-vat-returns"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "vat-return-stagger:uk-next-month-first"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/tax-representative"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/join-flat-rate"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "false"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/attachment-method"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "2"
+    },
+    {
+      "match": {
+        "path_contains": "/register-for-vat/file-upload/upload-document"
+      },
+      "answers": {},
+      "action": "stop"
+    }
+  ]
+}

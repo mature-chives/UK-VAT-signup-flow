@@ -90,6 +90,46 @@ async def run() -> None:
 
         await page.set_content(
             """
+            <main>
+              <a href="#nav">Skip to content</a>
+              <div class="govuk-accordion__section">
+                <h2 class="govuk-accordion__section-heading">
+                  <button class="govuk-accordion__section-button">
+                    About the business Hide
+                  </button>
+                </h2>
+                <div class="govuk-summary-list__row">
+                  <dt class="govuk-summary-list__key">Business name</dt>
+                  <dd><a href="#name">Change <span>business name</span></a></dd>
+                </div>
+              </div>
+            </main>
+            """
+        )
+        named = await runner._final_review_change_items(page)
+        assert named == [
+            {"id": "change-0", "label": "About the business — Business name"}
+        ]
+
+        await page.set_content(
+            """
+            <main>
+              <h1>Your company's Corporation Tax Unique Taxpayer Reference (UTR)</h1>
+              <a href="#skip">I do not have the company's UTR number</a>
+              <form>
+                <label for="utr">What is your Corporation Tax UTR?</label>
+                <input id="utr" name="utr" type="text">
+                <button>Continue</button>
+              </form>
+            </main>
+            """
+        )
+        utr_form = await runner._remote_edit_form(page)
+        assert "I do not have the company's UTR number" in utr_form["actions"]
+        assert "Continue" in utr_form["actions"]
+
+        await page.set_content(
+            """
             <main><form>
               <h1>What is the business email address?</h1>
               <label for="business-email">Email address</label>

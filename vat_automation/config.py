@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 UNSET = object()
 UK_NEXT_MONTH_FIRST_PREFIX = "date:uk-next-month-first."
 UK_NEXT_MONTH_VAT_STAGGER = "vat-return-stagger:uk-next-month-first"
+DOC_PREFIX = "doc:"
+ENV_PREFIX = "env:"
 LIVE_APPLICATION_TEST_MARKERS: tuple[tuple[str, str], ...] = (
     ("example.com", "检测到示例邮箱域名 example.com"),
     ("test-", "检测到 TEST- 测试标记"),
@@ -102,6 +104,35 @@ def resolve_dynamic_value(value: Any, target_date: date) -> Any:
     if component not in components:
         raise ValueError(f"不支持的动态日期字段：{value}")
     return str(components[component])
+
+
+def is_placeholder_token(value: str) -> bool:
+    return value.startswith(DOC_PREFIX) or value.startswith(ENV_PREFIX)
+
+
+def is_placeholder_chain(value: Any) -> bool:
+    """整段都是 doc: / env: 令牌时才按占位符链解析，避免误伤普通文案。"""
+    if not isinstance(value, str) or not value:
+        return False
+    return all(is_placeholder_token(part) for part in value.split("|"))
+
+
+def expand_document_address(
+    source: str, document_values: Mapping[str, str] | None
+) -> dict[str, str]:
+    """把 doc:home / doc:business 展开为国际地址表单字段。"""
+    if not source.startswith(DOC_PREFIX) or not document_values:
+        return {}
+    kind = source.removeprefix(DOC_PREFIX).strip()
+    from .document_parser import extracted_address, extracted_home_address
+
+    if kind == "home":
+        raw = extracted_home_address(dict(document_values))
+    elif kind == "business":
+        raw = extracted_address(dict(document_values))
+    else:
+        return {}
+    return build_international_address_answers(raw)
 
 
 def _clean_address_text(value: Any) -> str:
@@ -264,6 +295,7 @@ class PageRule:
     answers: dict[str, Any] = field(default_factory=dict)
     default_answer: Any = field(default_factory=lambda: UNSET)
     action: str = "continue"
+    address_source: str = ""
 
     def matches(self, url: str, heading: str) -> bool:
         return (
@@ -293,6 +325,7 @@ class Settings:
         url: str,
         heading: str,
         aliases: tuple[str, ...] = (),
+        document_values: Mapping[str, str] | None = None,
     ) -> tuple[bool, Any]:
         matching_pages: list[PageRule] = []
         for page in self.pages:
@@ -304,13 +337,19 @@ class Settings:
             if wanted & normalized_group:
                 wanted.update(normalized_group)
 
-        # 页面级答案必须整体优先于全局答案。不能先把字典合并后再按
-        # 插入顺序搜索：例如业务邮箱控件的 label 是 "Email address"，
-        # name 是 "businessEmailAddress"，全局个人邮箱会因此抢先命中。
-        for answers in (
-            *(page.answers for page in reversed(matching_pages)),
-            self.answers,
-        ):
+        # 同一层内：后写的页面规则优先于先写的，页面整表优先于全局。
+        # 申请人资料通过 doc: 占位符或 address_source 提供，不写进全局 Email address。
+        answer_maps: list[Mapping[str, Any]] = []
+        for page in reversed(matching_pages):
+            if page.address_source:
+                expanded = expand_document_address(
+                    page.address_source, document_values
+                )
+                if expanded:
+                    answer_maps.append(expanded)
+            answer_maps.append(page.answers)
+        answer_maps.append(self.answers)
+        for answers in answer_maps:
             for key, value in answers.items():
                 if normalize(key) in wanted:
                     return True, value
@@ -328,11 +367,13 @@ class Settings:
         return "continue"
 
     def live_application_warnings(
-        self, env: Mapping[str, str] | None = None
+        self,
+        env: Mapping[str, str] | None = None,
+        document_values: Mapping[str, str] | None = None,
     ) -> list[str]:
         warnings: list[str] = []
         seen: set[str] = set()
-        for _, value in self._iter_live_application_values(env):
+        for _, value in self._iter_live_application_values(env, document_values):
             text = str(value).strip()
             if not text:
                 continue
@@ -350,12 +391,19 @@ class Settings:
         return warnings
 
     def _iter_live_application_values(
-        self, env: Mapping[str, str] | None = None
+        self,
+        env: Mapping[str, str] | None = None,
+        document_values: Mapping[str, str] | None = None,
     ) -> Iterable[tuple[str, Any]]:
         for key, value in self.answers.items():
-            yield key, value
+            if not is_placeholder_chain(value):
+                yield key, value
         for page in self.pages:
             for key, value in page.answers.items():
+                if not is_placeholder_chain(value):
+                    yield key, value
+        if document_values:
+            for key, value in document_values.items():
                 yield key, value
         if not env:
             return
@@ -386,7 +434,15 @@ def load_settings(path: Path) -> Settings:
 
     pages: list[PageRule] = []
     for item in raw.get("pages", []):
-        page_answers = build_address_answers(item.get("address", {}))
+        address = item.get("address", {})
+        address_source = ""
+        if isinstance(address, str):
+            address_source = address.strip()
+            if address_source and not address_source.startswith(DOC_PREFIX):
+                raise ValueError(f"页面 address 必须是对象或 doc: 引用：{address}")
+            page_answers = {}
+        else:
+            page_answers = build_address_answers(address)
         page_answers.update(resolve_answers(item.get("answers", {})))
         pages.append(
             PageRule(
@@ -397,6 +453,7 @@ def load_settings(path: Path) -> Settings:
                     item.get("default_answer", UNSET), target_date
                 ),
                 action=item.get("action", "continue"),
+                address_source=address_source,
             )
         )
     # 这些是当前业务模型的固定规则，追加在最后以防止配置文件中的旧值覆盖。

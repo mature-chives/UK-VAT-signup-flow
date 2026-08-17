@@ -583,6 +583,38 @@ class JobManagerTests(WebAuthContext):
             )
         self.assertEqual(caught.exception.status_code, 409)
 
+    def test_remote_edit_skip_action_does_not_require_fields(self) -> None:
+        manager = context.jobs()
+        session = manager.session("alice")
+        with manager._lock:
+            session.state["status"] = "editing"
+            session.final_review_edit = {
+                "available": True,
+                "fields": [
+                    {
+                        "key": "utr",
+                        "kind": "text",
+                        "label": "What is your Corporation Tax UTR?",
+                        "required": True,
+                    }
+                ],
+                "actions": [
+                    "I do not have the company's UTR number",
+                    "Continue",
+                ],
+            }
+        manager.submit_remote_edit(
+            "alice",
+            RemoteEditSubmitRequest(
+                answers={"utr": ""},
+                action="I do not have the company's UTR number",
+            ),
+        )
+        self.assertEqual(
+            session.pending_edit_action,
+            "I do not have the company's UTR number",
+        )
+
     def test_remote_edit_submit_endpoint_requires_editing_state(self) -> None:
         with self.assertRaises(HTTPException) as caught:
             asyncio.run(
@@ -596,9 +628,14 @@ class JobManagerTests(WebAuthContext):
             )
         self.assertEqual(caught.exception.status_code, 409)
 
-    def test_reinjected_rules_do_not_accumulate(self) -> None:
+    def test_identity_upload_page_continues_when_files_present(self) -> None:
         manager = context.jobs()
         session = manager.session("alice")
+        session.active_identity_documents = [
+            Path(self._workspace.name) / "a.pdf",
+            Path(self._workspace.name) / "b.pdf",
+            Path(self._workspace.name) / "c.pdf",
+        ]
         settings = Settings(
             start_url="https://example.test",
             profile_dir=Path(self._workspace.name) / "profile",
@@ -606,45 +643,18 @@ class JobManagerTests(WebAuthContext):
             answers={},
             pages=[
                 PageRule(
-                    path_contains="/register-for-vat/application-reference",
-                    answers={"value": "OLD-REFERENCE"},
+                    path_contains="/file-upload/upload-document",
+                    action="stop",
                 )
             ],
         )
-        values = {
-            "application_reference": "AB223322-UK-Example Ltd",
-            "email": "person@example.test",
-            "vat_contact_email": "vat@example.test",
-        }
-        manager._apply_extracted_values(session, settings, values)
-        first_count = len(settings.pages)
-        manager._apply_extracted_values(session, settings, values)
-        self.assertEqual(len(settings.pages), first_count)
+        manager._enable_identity_uploads(session, settings)
         self.assertEqual(
-            settings.answer_for(
-                "value",
-                "https://example.test/register-for-vat/application-reference",
-                "Choose an application reference",
+            settings.action_for(
+                "https://example.test/register-for-vat/file-upload/upload-document",
+                "Upload a document",
             ),
-            (True, "AB223322-UK-Example Ltd"),
-        )
-        self.assertEqual(
-            settings.answer_for(
-                "Email address",
-                "https://example.test/register-for-vat/email-address",
-                "What is your email address?",
-                aliases=("email-address",),
-            ),
-            (True, "person@example.test"),
-        )
-        self.assertEqual(
-            settings.answer_for(
-                "Email address",
-                "https://example.test/register-for-vat/business-email",
-                "What is the business email address?",
-                aliases=("businessEmailAddress",),
-            ),
-            (True, "vat@example.test"),
+            "continue",
         )
 
 

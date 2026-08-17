@@ -32,20 +32,14 @@ from .auth import (
     normalize_username,
 )
 from .config import (
-    PageRule,
     Settings,
-    build_address_answers,
-    build_international_address_answers,
     load_settings,
 )
 from .document_parser import (
     extract_document,
-    extracted_address,
-    extracted_answers,
-    extracted_birth_date,
-    extracted_home_address,
+    prepare_document_values,
 )
-from .runner import AutomationStopped, VatAutomation
+from .runner import AutomationStopped, VatAutomation, is_skip_edit_action
 
 
 ALLOWED_ENV_KEYS = {
@@ -146,7 +140,6 @@ class UserSession:
     pending_edit_action: str = ""
     identity_documents: list[Path] = field(default_factory=list)
     active_identity_documents: list[Path] = field(default_factory=list)
-    injected_rules: list[PageRule] = field(default_factory=list)
     final_review: dict[str, Any] = field(default_factory=dict)
     final_review_edit: dict[str, Any] = field(default_factory=dict)
     review_action: str = ""
@@ -243,7 +236,6 @@ class JobManager:
                 "message": "正在加载配置并启动浏览器",
             }
             session.active_identity_documents = list(session.identity_documents)
-            session.injected_rules = []
             session.final_review = {}
             session.pause_requested.clear()
             session.resume_event.clear()
@@ -347,19 +339,20 @@ class JobManager:
             allowed_keys = {str(item.get("key", "")) for item in fields}
             if set(request.answers) - allowed_keys:
                 raise ValueError("提交内容包含当前 HMRC 页面不存在的字段。")
-            for field in fields:
-                if not field.get("required"):
-                    continue
-                key = str(field.get("key", ""))
-                value = request.answers.get(key)
-                if value is None or value == "" or value == []:
-                    raise ValueError(f"请填写必填项：{field.get('label') or key}")
-                if field.get("kind") == "checkbox" and value is not True:
-                    raise ValueError(f"请勾选必填项：{field.get('label') or key}")
             actions = [str(item) for item in session.final_review_edit.get("actions", [])]
             action = request.action or (actions[0] if actions else "")
             if action not in actions:
                 raise ValueError("请选择当前 HMRC 页面提供的继续操作。")
+            if not is_skip_edit_action(action):
+                for field in fields:
+                    if not field.get("required"):
+                        continue
+                    key = str(field.get("key", ""))
+                    value = request.answers.get(key)
+                    if value is None or value == "" or value == []:
+                        raise ValueError(f"请填写必填项：{field.get('label') or key}")
+                    if field.get("kind") == "checkbox" and value is not True:
+                        raise ValueError(f"请勾选必填项：{field.get('label') or key}")
             session.pending_edit_answers = dict(request.answers)
             session.pending_edit_action = action
             session.final_review_edit = {"available": False}
@@ -559,89 +552,13 @@ class JobManager:
             if self._busy_with == session.username:
                 self._busy_with = None
 
-    def _apply_extracted_values(
-        self, session: UserSession, settings: Settings, values: dict[str, str]
-    ) -> None:
-        """把提取结果合并进配置。
-
-        每次暂停继续都会重新注入，所以先移除上一轮注入的规则，
-        避免 settings.pages 随暂停次数无限增长。
-        """
-        previous = {id(rule) for rule in session.injected_rules}
-        if previous:
-            settings.pages = [
-                page for page in settings.pages if id(page) not in previous
-            ]
-            session.injected_rules = []
-
-        settings.answers.update(extracted_answers(values))
-        settings.answers.update(build_address_answers(extracted_address(values)))
-        home_address_answers = build_international_address_answers(
-            extracted_home_address(values)
-        )
-        business_address_answers = build_international_address_answers(
-            extracted_address(values)
-        )
-
-        def inject(path_contains: str, answers: dict[str, str]) -> None:
-            rule = PageRule(path_contains=path_contains, answers=dict(answers))
-            settings.pages.append(rule)
-            session.injected_rules.append(rule)
-
-        contact_paths = {
-            "/register-for-vat/email-address": (
-                {"email-address", "Email address"}, values.get("email", "")
-            ),
-            "/register-for-vat/telephone-number": (
-                {"telephone-number", "Telephone number"}, values.get("phone", "")
-            ),
-            "/register-for-vat/business-email": (
-                {"businessEmailAddress"}, values.get("vat_contact_email", "")
-            ),
-            "/register-for-vat/business-telephone-number": (
-                {"daytimePhone"}, values.get("business_phone", "")
-            ),
-        }
+    @staticmethod
+    def _enable_identity_uploads(session: UserSession, settings: Settings) -> None:
+        if not session.active_identity_documents:
+            return
         for page in settings.pages:
-            if "/register-for-vat/application-reference" in page.path_contains:
-                page.answers.pop("value", None)
-            for path, (keys, _) in contact_paths.items():
-                if path in page.path_contains:
-                    for key in keys:
-                        page.answers.pop(key, None)
-
-        application_reference = values.get("application_reference", "")
-        if application_reference:
-            inject(
-                "/register-for-vat/application-reference",
-                {"value": application_reference},
-            )
-        for path, (keys, value) in contact_paths.items():
-            if value:
-                inject(path, {key: value for key in keys})
-        if home_address_answers:
-            inject(
-                "/register-for-vat/home-address/international", home_address_answers
-            )
-        if business_address_answers:
-            inject(
-                "/register-for-vat/principal-place-business/international",
-                business_address_answers,
-            )
-
-        birth_date = extracted_birth_date(values)
-        for page in settings.pages:
-            if "/date-of-birth" in page.path_contains and birth_date:
-                page.answers.update(birth_date)
-            if "/overseas-identifier" in page.path_contains:
-                identifier = values.get("overseas_tax_identifier", "")
-                if identifier:
-                    page.answers.update(
-                        {"tax-identifier-radio": "Yes", "tax-identifier": identifier}
-                    )
             if "/file-upload/upload-document" in page.path_contains:
-                if session.active_identity_documents:
-                    page.action = "continue"
+                page.action = "continue"
 
     def _run(
         self,
@@ -653,18 +570,21 @@ class JobManager:
     ) -> None:
         try:
             settings = load_settings(self.config_path)
-            self._apply_extracted_values(session, settings, extracted_values)
+            bag = prepare_document_values(extracted_values)
+            self._enable_identity_uploads(session, settings)
 
             async def execute() -> None:
                 async def pause_checkpoint(url: str, heading: str) -> None:
                     updates = await self._pause_checkpoint(session, url, heading)
                     if updates:
-                        self._apply_extracted_values(session, settings, updates)
+                        bag.clear()
+                        bag.update(prepare_document_values(updates))
 
                 runner = VatAutomation(
                     settings,
                     interactive=False,
                     credentials=credentials,
+                    document_values=bag,
                     verification_code_provider=partial(
                         self._verification_code, session
                     ),
@@ -698,7 +618,7 @@ class JobManager:
 
 @dataclass
 class ServerContext:
-    config_path: Path = Path("vat-config.json")
+    config_path: Path = Path("vat-config.flow.json")
     users: UserStore = field(default_factory=lambda: UserStore(Path("users.json")))
     signer: SessionSigner = field(default_factory=SessionSigner)
     throttle: LoginThrottle = field(default_factory=LoginThrottle)
@@ -1088,7 +1008,7 @@ async def identity_documents(
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="启动英国 VAT 自动化本地 Web UI")
-    result.add_argument("--config", type=Path, default=Path("vat-config.json"))
+    result.add_argument("--config", type=Path, default=Path("vat-config.flow.json"))
     result.add_argument("--users", type=Path, default=Path("users.json"))
     result.add_argument("--cert-dir", type=Path, default=Path("certs"))
     result.add_argument("--host", default="127.0.0.1")

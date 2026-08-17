@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .config import Settings, normalize
+from .config import Settings, is_placeholder_chain, normalize
 
 
 SAFE_ACTIONS = (
@@ -27,6 +27,12 @@ FINAL_MARKERS = (
     "submit application",
     "send your application",
 )
+
+
+def is_skip_edit_action(action: str) -> bool:
+    """HMRC 上“我没有 UTR/NINO”一类跳过链接，不是表单提交。"""
+    text = normalize(action)
+    return text.startswith("i do not have") or text.startswith("skip")
 AUTH_HOSTS = {
     "access.service.gov.uk",
     "www.access.service.gov.uk",
@@ -69,6 +75,7 @@ class VatAutomation:
         ] | None = None,
         event_handler: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
         audit_context: Mapping[str, str] | None = None,
+        document_values: dict[str, str] | Mapping[str, str] | None = None,
     ) -> None:
         self.settings = settings
         self.interactive = interactive
@@ -76,6 +83,13 @@ class VatAutomation:
         # 且写进去的密码会被 Playwright 启动的 Chrome 子进程继承。
         self._credentials: Mapping[str, str] = (
             dict(credentials) if credentials is not None else os.environ
+        )
+        # 与凭据分开：申请人资料可进网页核对，密码不能。传入 dict 时共用同一对象，
+        # 便于暂停后替换整袋而不重建 runner。
+        self.document_values: dict[str, str] = (
+            document_values
+            if isinstance(document_values, dict)
+            else dict(document_values or {})
         )
         self.verification_code_provider = verification_code_provider
         self.file_upload_provider = file_upload_provider
@@ -293,10 +307,18 @@ class VatAutomation:
 
         if "/registration/name" in page.url or "full name" in normalize(heading):
             found, configured_name = self.settings.answer_for(
-                "Full name", page.url, heading
+                "Full name",
+                page.url,
+                heading,
+                document_values=self.document_values,
             )
+            if found:
+                try:
+                    configured_name = self._resolve_value(configured_name)
+                except KeyError:
+                    configured_name = ""
             full_name = self._credentials.get(
-                "HMRC_FULL_NAME", str(configured_name) if found else ""
+                "HMRC_FULL_NAME", str(configured_name) if found and configured_name else ""
             )
             if not full_name:
                 raise AutomationStopped(
@@ -316,11 +338,19 @@ class VatAutomation:
             or "country for this mobile phone number" in normalize(heading)
         ):
             found, configured_country = self.settings.answer_for(
-                "Country", page.url, heading
+                "Country",
+                page.url,
+                heading,
+                document_values=self.document_values,
             )
+            if found:
+                try:
+                    configured_country = self._resolve_value(configured_country)
+                except KeyError:
+                    configured_country = ""
             country = self._credentials.get(
                 "HMRC_MFA_PHONE_COUNTRY",
-                str(configured_country) if found else "",
+                str(configured_country) if found and configured_country else "",
             )
             if not country:
                 raise AutomationStopped(
@@ -538,6 +568,7 @@ class VatAutomation:
                     page.url,
                     heading,
                     aliases=(control.name, control.element_id),
+                    document_values=self.document_values,
                 )
             if not found:
                 if control.required:
@@ -548,7 +579,13 @@ class VatAutomation:
             try:
                 value = self._resolve_value(value)
             except KeyError as exc:
-                missing.append(f"{control.label or key}（缺少环境变量 {exc.args[0]}）")
+                token = str(exc.args[0])
+                if token.startswith("doc:"):
+                    missing.append(f"{control.label or key}（缺少资料：{token}）")
+                else:
+                    missing.append(
+                        f"{control.label or key}（缺少环境变量 {token}）"
+                    )
                 continue
             if control.kind == "radio":
                 group = [item for item in controls if item.name == control.name]
@@ -592,11 +629,31 @@ class VatAutomation:
         return missing
 
     def _resolve_value(self, value: Any) -> Any:
-        if isinstance(value, str) and value.startswith("env:"):
+        if isinstance(value, str) and is_placeholder_chain(value):
+            last_error: KeyError | None = None
+            for part in value.split("|"):
+                try:
+                    resolved = self._resolve_placeholder_token(part)
+                except KeyError as exc:
+                    last_error = exc
+                    continue
+                if resolved is not None and str(resolved).strip() != "":
+                    return resolved
+            raise last_error if last_error is not None else KeyError(value)
+        return value
+
+    def _resolve_placeholder_token(self, value: str) -> Any:
+        if value.startswith("env:"):
             variable = value.removeprefix("env:")
             resolved = self._credentials.get(variable)
             if not resolved:
                 raise KeyError(variable)
+            return resolved
+        if value.startswith("doc:"):
+            key = value.removeprefix("doc:")
+            resolved = self.document_values.get(key, "")
+            if not str(resolved).strip():
+                raise KeyError(value)
             return resolved
         return value
 
@@ -703,7 +760,9 @@ class VatAutomation:
         return True
 
     async def _handle_honesty_declaration(self, page: Any, heading: str) -> None:
-        warnings = self.settings.live_application_warnings(self._credentials)
+        warnings = self.settings.live_application_warnings(
+            self._credentials, document_values=self.document_values
+        )
         if warnings:
             await self._snapshot(
                 page,
@@ -795,21 +854,33 @@ class VatAutomation:
         """提取最终核对页可远程操作的 Change 链接，不向客户端暴露 URL。"""
         raw = await page.locator("main a").evaluate_all(
             r"""
-            links => links.map((link, index) => {
-              const visible = !!(link.offsetWidth || link.offsetHeight || link.getClientRects().length);
-              const text = (link.innerText || '').replace(/\s+/g, ' ').trim();
-              if (!visible || !/^change\b/i.test(text)) return null;
-              const row = link.closest('.govuk-summary-list__row, tr, li');
-              const key = row?.querySelector('.govuk-summary-list__key, th, dt');
-              const section = row?.closest('.govuk-accordion__section')
-                ?.querySelector('.govuk-accordion__section-heading');
-              const fieldLabel = (key?.innerText || text.replace(/^change\s*/i, ''))
-                .replace(/\s+/g, ' ').trim();
-              const sectionLabel = (section?.innerText || '').replace(/\s+/g, ' ').trim();
-              const label = sectionLabel && !fieldLabel.startsWith(sectionLabel)
-                ? `${sectionLabel} — ${fieldLabel}` : fieldLabel;
-              return {id: `change-${index}`, label: label || text};
-            }).filter(Boolean)
+            links => {
+              let changeIndex = 0;
+              return links.map(link => {
+                const visible = !!(link.offsetWidth || link.offsetHeight || link.getClientRects().length);
+                const text = (link.innerText || '').replace(/\s+/g, ' ').trim();
+                if (!visible || !/^change\b/i.test(text)) return null;
+                const row = link.closest('.govuk-summary-list__row, tr, li');
+                const key = row?.querySelector('.govuk-summary-list__key, th, dt');
+                const section = row?.closest('.govuk-accordion__section');
+                const heading = section?.querySelector(
+                  '.govuk-accordion__section-button, .govuk-accordion__section-heading'
+                );
+                const fieldLabel = (key?.innerText || text.replace(/^change\s*/i, ''))
+                  .replace(/\s+/g, ' ').trim();
+                let sectionLabel = (heading?.innerText || '').replace(/\s+/g, ' ').trim();
+                sectionLabel = sectionLabel
+                  .replace(/\b(show|hide)(\s+this section)?\b/ig, '')
+                  .replace(/\s+,/g, ',')
+                  .replace(/\s+/g, ' ')
+                  .trim()
+                  .replace(/^,|,$/g, '')
+                  .trim();
+                const label = sectionLabel && !fieldLabel.startsWith(sectionLabel)
+                  ? `${sectionLabel} — ${fieldLabel}` : fieldLabel;
+                return {id: `change-${changeIndex++}`, label: label || text};
+              }).filter(Boolean);
+            }
             """
         )
         return [
@@ -817,6 +888,19 @@ class VatAutomation:
             for item in raw
             if item.get("id") and item.get("label")
         ]
+
+    async def _final_review_change_link(self, page: Any, index: int) -> Any | None:
+        """按 Change 链接自己的序号定位，不用 main 里全部 a 的下标。"""
+        seen = 0
+        for link in await page.locator("main a").all():
+            if not await link.is_visible():
+                continue
+            if not normalize(await link.inner_text()).startswith("change"):
+                continue
+            if seen == index:
+                return link
+            seen += 1
+        return None
 
     async def _handle_remote_final_review_edit(
         self, page: Any, target: str, changes: list[dict[str, str]]
@@ -826,14 +910,14 @@ class VatAutomation:
         match = re.fullmatch(r"change-(\d+)", target)
         if match is None:
             raise AutomationStopped("最终核对修改项目格式无效。")
-        link = page.locator("main a").nth(int(match.group(1)))
-        if not await link.count() or not await link.is_visible():
+        link = await self._final_review_change_link(page, int(match.group(1)))
+        if link is None:
             raise AutomationStopped("最终核对页上的 Change 链接已不可用。")
-        if not normalize(await link.inner_text()).startswith("change"):
-            raise AutomationStopped("最终核对页结构已变化，请重新生成核对项目。")
+        return_url = page.url
         await link.click()
         await page.wait_for_timeout(350)
 
+        submitted = False
         for _ in range(40):
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=15_000)
@@ -851,8 +935,22 @@ class VatAutomation:
                 await self._enter_verification_code(page, verification_input)
                 continue
 
-            form = await self._remote_edit_form(page)
             errors = await self._validation_errors(page)
+            if submitted and not errors:
+                if await self._return_to_final_review_from_edit(page, return_url):
+                    heading = await self._heading(page)
+                    if self._is_final_page(page.url, heading):
+                        await self._audit(
+                            "final-review-edit-completed",
+                            url=page.url,
+                            heading=heading,
+                        )
+                        return heading
+                raise AutomationStopped(
+                    "修改已保存，但未能回到最终核对页。"
+                )
+
+            form = await self._remote_edit_form(page)
             response = await self.remote_edit_provider(
                 {
                     "url": _safe_url(page.url),
@@ -864,9 +962,6 @@ class VatAutomation:
             )
             if not isinstance(response, dict):
                 raise AutomationStopped("远程修改未返回有效的网页操作。")
-            await self._apply_remote_edit_answers(
-                page, form["fields"], response.get("answers", {})
-            )
             action = str(response.get("action", "")).strip()
             if not action and form["actions"]:
                 action = form["actions"][0]
@@ -874,11 +969,95 @@ class VatAutomation:
                 raise AutomationStopped("远程修改提交按钮无效，请重新进入修改。")
             if any(normalize(marker) in normalize(action) for marker in FINAL_MARKERS):
                 raise AutomationStopped("远程修改阶段禁止触发最终提交按钮。")
+            if not is_skip_edit_action(action):
+                await self._apply_remote_edit_answers(
+                    page, form["fields"], response.get("answers", {})
+                )
             if not await self._click_named_action(page, action):
                 raise AutomationStopped(f"远程修改页面找不到操作：{action}")
+            submitted = True
             await page.wait_for_timeout(350)
 
         raise AutomationStopped("远程修改经过 40 个页面仍未返回最终核对页。")
+
+    @staticmethod
+    def _application_progress_url(current_url: str) -> str:
+        parsed = urlparse(current_url)
+        return f"{parsed.scheme}://{parsed.netloc}/register-for-vat/application-progress"
+
+    @staticmethod
+    def _is_final_review_task_link(href: str, text: str, row_text: str = "") -> bool:
+        if re.search(r"cannot start yet", row_text, re.I):
+            return False
+        path = href.casefold()
+        label = normalize(text)
+        return (
+            "/register-for-vat/check-your-answers" in path
+            or "/register-for-vat/check-confirm-answers" in path
+            or label.startswith("check your answers")
+            or "check and confirm" in label
+        )
+
+    async def _click_final_review_task(self, page: Any) -> bool:
+        """只点最终核对任务，不点进度页上其它未完成项。"""
+        href = await page.locator("main").evaluate(
+            """
+            main => {
+              const links = [...main.querySelectorAll('a[href]')];
+              for (const link of links) {
+                const href = link.getAttribute('href') || '';
+                const text = (link.innerText || '').replace(/\\s+/g, ' ').trim();
+                const row = (link.closest('li, tr')?.innerText || '');
+                if (/cannot start yet/i.test(row)) continue;
+                const path = href.toLowerCase();
+                const label = text.toLowerCase();
+                if (
+                  path.includes('/register-for-vat/check-your-answers')
+                  || path.includes('/register-for-vat/check-confirm-answers')
+                  || /^check your answers\\b/.test(label)
+                  || label.includes('check and confirm')
+                ) {
+                  return href;
+                }
+              }
+              return null;
+            }
+            """
+        )
+        if not href:
+            return False
+        await self._audit("final-review-task", href=_safe_url(str(href)), url=page.url)
+        await page.locator(f'main a[href="{href}"]').first.click()
+        return True
+
+    async def _return_to_final_review_from_edit(
+        self, page: Any, return_url: str
+    ) -> bool:
+        """改完当前 Change 项后经进度页回到最终核对，不继续走整份申请。"""
+        heading = await self._heading(page)
+        if self._is_final_page(page.url, heading):
+            return True
+        if "/application-progress" not in urlparse(page.url).path.casefold():
+            progress = self._application_progress_url(page.url)
+            await self._audit("return-to-progress-after-edit", url=page.url)
+            await page.goto(progress, wait_until="domcontentloaded")
+            await page.wait_for_timeout(350)
+        if await self._click_final_review_task(page):
+            await page.wait_for_timeout(350)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+            except Exception:
+                pass
+            heading = await self._heading(page)
+            if self._is_final_page(page.url, heading):
+                return True
+        if return_url:
+            await self._audit("return-to-saved-final-review", url=return_url)
+            await page.goto(return_url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(350)
+            heading = await self._heading(page)
+            return self._is_final_page(page.url, heading)
+        return False
 
     async def _remote_edit_form(self, page: Any) -> dict[str, Any]:
         """把当前 HMRC 表单转换为可在 Web UI 中安全渲染的字段描述。"""
@@ -931,9 +1110,14 @@ class VatAutomation:
                   fields.push({...base, kind, value: el.value || '', options: []});
                 }
               }
-              const actions = [...main.querySelectorAll('button, input[type="submit"], a.govuk-button')]
+              const buttonActions = [...main.querySelectorAll('button, input[type="submit"], a.govuk-button')]
                 .filter(visible)
-                .map(el => (el.innerText || el.value || '').replace(/\s+/g, ' ').trim())
+                .map(el => (el.innerText || el.value || '').replace(/\s+/g, ' ').trim());
+              const skipActions = [...main.querySelectorAll('a')]
+                .filter(visible)
+                .map(el => (el.innerText || '').replace(/\s+/g, ' ').trim())
+                .filter(text => /^i do not have\b/i.test(text) || /^skip\b/i.test(text));
+              const actions = [...skipActions, ...buttonActions]
                 .filter((value, index, all) => value && all.indexOf(value) === index);
               return {fields, actions};
             }

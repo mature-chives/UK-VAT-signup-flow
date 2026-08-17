@@ -6,6 +6,7 @@ import zipfile
 from vat_automation.document_parser import (
     extract_document,
     extracted_birth_date,
+    prepare_document_values,
 )
 
 
@@ -115,6 +116,7 @@ class DocumentParserTests(unittest.TestCase):
         self.assertEqual(values["business_name"], "Local Trading Ltd")
         self.assertEqual(values["full_name"], "Ming Li")
         self.assertEqual(values["company_registration_number"], "ABC123")
+        self.assertEqual(values["overseas_tax_identifier"], "ABC123")
         self.assertEqual(values["email"], "personal@example.test")
         self.assertEqual(values["phone"], "8613900000000")
         self.assertEqual(values["vat_contact_email"], "vat@example.test")
@@ -167,6 +169,41 @@ class DocumentParserTests(unittest.TestCase):
                     values["application_reference"],
                     "AB223322-UK-Hangzhou Fell Wheel Technology Co., Ltd",
                 )
+
+    def test_prepare_document_values_expands_birth_date_and_tax_id(self) -> None:
+        bag = prepare_document_values(
+            {
+                "first_name": "Ming",
+                "birth_date": "1990-02-03",
+                "overseas_tax_identifier": "TAX-123",
+                "email": "  person@example.test  ",
+            }
+        )
+        self.assertEqual(bag["first_name"], "Ming")
+        self.assertEqual(bag["email"], "person@example.test")
+        self.assertEqual(bag["date-of-birth.day"], "3")
+        self.assertEqual(bag["date-of-birth.year"], "1990")
+        self.assertEqual(bag["tax-identifier-radio"], "Yes")
+        self.assertEqual(bag["tax-identifier"], "TAX-123")
+
+    def test_company_registration_number_is_used_as_overseas_tax_id(self) -> None:
+        values = extract_document(
+            "vat-info.txt",
+            (
+                "Business name: Example Ltd\n"
+                "Full name: San Zhang\n"
+                "Email: user@example.test\n"
+                "Phone: 8613800138000\n"
+                "公司注册号（统一社会信用代码）：91330100MA2XXXXX1A\n"
+                "City: Hangzhou\n"
+            ).encode(),
+        )["values"]
+        self.assertEqual(values["company_registration_number"], "91330100MA2XXXXX1A")
+        self.assertEqual(values["overseas_tax_identifier"], "91330100MA2XXXXX1A")
+        bag = prepare_document_values(values)
+        self.assertEqual(bag["tax-identifier-radio"], "Yes")
+        self.assertEqual(bag["tax-identifier"], "91330100MA2XXXXX1A")
+        self.assertEqual(bag["overseas_tax_identifier"], "91330100MA2XXXXX1A")
 
     def test_birth_date_is_converted_to_hmrc_components(self) -> None:
         self.assertEqual(
