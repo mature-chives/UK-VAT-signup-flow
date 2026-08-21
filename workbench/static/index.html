@@ -1,0 +1,1025 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>销售交付工作台</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="is-home">
+<a class="skip" href="#plugin-list">跳到业务菜单</a>
+<header class="app-header">
+  <div class="bar">
+    <button type="button" class="brand" id="home-link">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <strong>销售交付工作台</strong>
+        <small>销售与交付同一套菜单 · Chrome 只在服务器上跑</small>
+      </div>
+    </button>
+    <div class="who-wrap">
+      <span id="who"></span>
+      <button id="logout" class="ghost" type="button">退出</button>
+    </div>
+  </div>
+</header>
+
+<main id="home" class="catalog">
+  <header class="catalog-head">
+    <h1>要做哪件事</h1>
+    <p>点一项进入。菜单来自已登记插件，新增业务不用改这个页面。</p>
+  </header>
+  <div id="home-live" class="home-live" hidden></div>
+  <div id="plugin-list"></div>
+</main>
+
+<div id="workspace" class="workspace" hidden>
+  <header class="page-head">
+    <button type="button" class="back" id="back-home">全部业务</button>
+    <p id="plugin-group" class="eyebrow"></p>
+    <h1 id="plugin-title"></h1>
+    <p id="plugin-desc" class="lede"></p>
+    <div id="placeholder-box" class="banner warn" style="display:none">该能力尚未接入自动化，可以先建任务占位并挂上客户资料。</div>
+  </header>
+
+  <section id="desk-view">
+    <div class="desk-toolbar">
+      <div class="task-toolbar">
+        <div id="task-filters">
+          <button type="button" class="chip active" data-filter="all">全部 0</button>
+          <button type="button" class="chip" data-filter="live">进行中 0</button>
+          <button type="button" class="chip" data-filter="hold">待处理 0</button>
+          <button type="button" class="chip" data-filter="done">已交付 0</button>
+        </div>
+      </div>
+      <button id="new-task" type="button">新建</button>
+    </div>
+    <div id="task-list" class="task-grid"></div>
+  </section>
+
+  <section id="new-view" class="pane" hidden>
+    <button type="button" class="back" id="back-desk">返回任务台</button>
+    <ol class="wizard-nav" id="wizard-nav">
+      <li data-step="1" class="active">1 客户</li>
+      <li data-step="2">2 资料</li>
+      <li data-step="3">3 确认</li>
+    </ol>
+
+    <section class="card" id="step-customer">
+      <h2>客户档案</h2>
+      <p class="hint">一个客户可挂多笔业务。解析授权表后会写入常用字段。</p>
+      <div class="row">
+        <div>
+          <label for="customer-select">已有客户</label>
+          <select id="customer-select"><option value="">新建客户</option></select>
+        </div>
+        <div>
+          <label for="customer-name">客户名称</label>
+          <input id="customer-name" autocomplete="organization">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label for="project-code">项目编号</label>
+          <input id="project-code">
+        </div>
+        <div>
+          <label for="customer-notes">备注</label>
+          <input id="customer-notes">
+        </div>
+      </div>
+      <details id="customer-extra-fields">
+        <summary>常用字段（解析授权表后会写入）</summary>
+        <div class="row">
+          <div><label for="field-business-name">公司名</label><input id="field-business-name" data-field="business_name"></div>
+          <div><label for="field-email">邮箱</label><input id="field-email" data-field="email" type="email"></div>
+        </div>
+        <div class="row">
+          <div><label for="field-phone">电话</label><input id="field-phone" data-field="phone"></div>
+          <div><label for="field-uscc">统一社会信用代码</label><input id="field-uscc" data-field="company_registration_number"></div>
+        </div>
+      </details>
+      <div class="actions">
+        <button id="save-customer" type="button">保存客户</button>
+        <button id="wizard-next-1" class="secondary" type="button" disabled>下一步</button>
+      </div>
+      <div id="customer-msg" class="msg"></div>
+    </section>
+
+    <section class="card" id="step-files" hidden>
+      <h2>这份业务要用的资料</h2>
+      <p id="file-intake-hint" class="hint">按插件要求勾选或上传。</p>
+      <label for="file-category">上传到该客户</label>
+      <div class="row">
+        <select id="file-category"></select>
+        <input id="customer-file" type="file">
+      </div>
+      <div class="actions">
+        <button id="upload-file" class="secondary" type="button">上传并挂到客户</button>
+        <button id="parse-file" class="secondary" type="button">解析选中的授权表</button>
+      </div>
+      <div id="file-msg" class="msg"></div>
+      <ul id="customer-files" class="list"></ul>
+      <div class="actions">
+        <button id="wizard-prev-2" class="secondary" type="button">上一步</button>
+        <button id="wizard-next-2" type="button">下一步</button>
+      </div>
+    </section>
+
+    <section class="card" id="step-confirm" hidden>
+      <h2>确认并创建</h2>
+      <p id="action-hint" class="hint">勾选本次要带上任务的字段。</p>
+      <h3 id="field-picks-title">本次要用的字段</h3>
+      <div id="field-picks"></div>
+      <div id="file-picks"></div>
+      <div class="actions">
+        <button id="wizard-prev-3" class="secondary" type="button">上一步</button>
+        <button id="create-task" type="button" disabled>创建任务</button>
+      </div>
+      <div id="task-msg" class="msg"></div>
+    </section>
+  </section>
+
+  <section id="job-view" class="pane" hidden>
+    <button type="button" class="back" id="back-desk-job">返回任务台</button>
+    <article class="card">
+      <div class="card-head">
+        <div>
+          <h2 id="job-heading">任务</h2>
+          <p id="job-meta" class="hint"></p>
+        </div>
+        <span id="job-badge" class="badge"></span>
+      </div>
+      <div id="job-files" class="hint"></div>
+      <div id="uk-vat-box" style="display:none">
+        <h3 id="action-title">启动注册</h3>
+        <p class="hint">Chrome 在服务器本机启动。同事只能在这里看状态、交验证码。</p>
+        <div class="row">
+          <div>
+            <label for="hmrc-email">开户邮箱</label>
+            <input id="hmrc-email" type="email" autocomplete="off">
+          </div>
+          <div>
+            <label for="hmrc-phone">短信手机</label>
+            <input id="hmrc-phone" autocomplete="off">
+          </div>
+        </div>
+        <label for="hmrc-password">开户密码</label>
+        <input id="hmrc-password" type="password" autocomplete="new-password">
+        <label class="check"><input id="extracted-ok" type="checkbox"> 已检查客户资料，确认无误</label>
+        <div class="actions">
+          <button id="start-uk-vat" type="button" disabled>启动英国 VAT 自动化</button>
+        </div>
+      </div>
+      <div id="otp">
+        <strong>请输入验证码</strong>
+        <input id="code" autocomplete="one-time-code" inputmode="text" spellcheck="false">
+        <div class="actions">
+          <button id="send-code" type="button">提交验证码</button>
+        </div>
+      </div>
+      <div id="run-status" class="status" style="display:none"></div>
+      <div id="id-card-box" style="display:none">
+        <h3>识别并生成翻译件</h3>
+        <ol id="id-card-hint" class="id-card-flow">
+          <li>本机识别正反面，照片不出网。首次加载模型可能要等一会儿。</li>
+          <li>核对下方字段，改完再生成。</li>
+          <li>一份两页 PDF：第 1 页译文正反面，第 2 页原件正反面。姓名拼音和号码留在本机，住址与签发机关按配置走云翻译。</li>
+        </ol>
+        <div class="actions">
+          <button id="id-card-ocr" class="secondary" type="button">识别证件字段</button>
+          <button id="id-card-pdf" type="button">核对无误，生成翻译件 PDF</button>
+        </div>
+        <div id="id-card-msg" class="msg"></div>
+        <div id="id-card-fields"></div>
+        <p id="id-card-download-wrap" class="hint" hidden>
+          <a id="id-card-download" href="#" download>下载完整翻译件 PDF</a>
+        </p>
+      </div>
+      <div id="translate-box" style="display:none">
+        <h3>翻译回传</h3>
+        <p class="hint">上传原件后，再回传译文即标记已交付。</p>
+        <label for="translate-task">翻译任务</label>
+        <select id="translate-task"></select>
+        <label for="translate-file">文件</label>
+        <input id="translate-file" type="file">
+        <div class="actions">
+          <button id="upload-source" class="secondary" type="button">上传原件</button>
+          <button id="upload-translation" type="button">回传译文</button>
+        </div>
+        <div id="translate-msg" class="msg"></div>
+      </div>
+    </article>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const FIELD_LABELS = {
+  business_name: "公司名",
+  email: "邮箱",
+  phone: "电话",
+  company_registration_number: "统一社会信用代码",
+  full_name: "姓名",
+  first_name: "名",
+  last_name: "姓",
+  project_code: "项目编号",
+  vat_contact_email: "VAT 沟通邮箱"
+};
+const CATEGORY_LABELS = {
+  authorization: "授权表",
+  identity: "身份证明",
+  "translation-source": "翻译原件",
+  "id-card-front": "身份证正面",
+  "id-card-back": "身份证背面",
+  other: "其他"
+};
+const ID_CARD_LABELS = {
+  full_name: "姓名",
+  sex: "性别",
+  ethnicity: "民族",
+  birth_date: "出生",
+  address: "住址",
+  identity_document_number: "公民身份号码",
+  issuing_authority: "签发机关",
+  valid_period: "有效期限"
+};
+const STATUS_LABELS = {
+  open: "待处理",
+  queued: "占位",
+  in_progress: "进行中",
+  waiting: "待验证码",
+  reviewing: "核对中",
+  blocked: "受阻",
+  failed: "失败",
+  delivered: "已交付"
+};
+let plugins = [];
+let customers = [];
+let tasks = [];
+let currentPlugin = null;
+let currentCustomerId = "";
+let currentUkTaskId = "";
+let selectedTaskId = "";
+let taskFilter = "all";
+let workspaceMode = "desk";
+let wizardStep = 1;
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[ch]));
+}
+function csrf() {
+  return document.cookie.split("; ").find(item => item.startsWith("vat_csrf="))?.split("=")[1] || "";
+}
+async function api(url, options={}) {
+  const headers = Object.assign({"x-csrf-token": csrf()}, options.headers || {});
+  const response = await fetch(url, Object.assign({}, options, {headers}));
+  if (response.status === 401) { location.href = "/login"; throw new Error("请先登录"); }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || "请求失败");
+  return body;
+}
+function fieldsFromForm() {
+  const fields = {};
+  document.querySelectorAll("[data-field]").forEach(input => {
+    if (input.value.trim()) fields[input.dataset.field] = input.value.trim();
+  });
+  return fields;
+}
+function fillFields(fields) {
+  document.querySelectorAll("[data-field]").forEach(input => {
+    input.value = (fields || {})[input.dataset.field] || "";
+  });
+}
+function selectedCustomer() {
+  return customers.find(item => item.id === currentCustomerId) || null;
+}
+function intakeFiles() {
+  return (currentPlugin && currentPlugin.intake && currentPlugin.intake.files) || [];
+}
+function isTranslateId() {
+  return !!(currentPlugin && currentPlugin.id === "translate-id");
+}
+function adaptWizardForPlugin() {
+  const rules = intakeFiles();
+  const canParse = rules.some(item => item.parse || item.category === "authorization");
+  $("parse-file").hidden = !canParse;
+  const idCard = isTranslateId();
+  $("customer-extra-fields").hidden = idCard;
+  $("field-picks-title").hidden = idCard;
+  $("field-picks").hidden = idCard;
+  $("action-hint").textContent = idCard
+    ? "确认已勾选身份证正面和背面，然后创建任务。"
+    : "勾选本次要带上任务的字段。";
+}
+function fieldLabel(key) {
+  return FIELD_LABELS[key] || key;
+}
+function statusLabel(status) {
+  return STATUS_LABELS[status] || status || "未知";
+}
+function formatWhen(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"});
+}
+function pluginTasks(pluginId) {
+  return tasks.filter(item => item.plugin_id === pluginId);
+}
+function liveCount(pluginId) {
+  return pluginTasks(pluginId).filter(item => ["in_progress", "waiting", "reviewing"].includes(item.status)).length;
+}
+function hashParts() {
+  const raw = decodeURIComponent(location.hash.replace(/^#/, ""));
+  if (!raw) return {plugin: "", rest: ""};
+  const [plugin, ...rest] = raw.split("/");
+  return {plugin, rest: rest.join("/")};
+}
+function pluginIdFromHash() {
+  return hashParts().plugin;
+}
+function syncCreateEnabled() {
+  $("create-task").disabled = !currentPlugin || !currentCustomerId;
+  $("start-uk-vat").disabled = !currentUkTaskId;
+  $("wizard-next-1").disabled = !currentCustomerId;
+}
+function showHome() {
+  currentPlugin = null;
+  workspaceMode = "desk";
+  selectedTaskId = "";
+  syncView();
+  renderPlugins();
+}
+function goHome() {
+  showHome();
+  if (hashParts().plugin) {
+    history.pushState({workbench: "home"}, "", location.pathname);
+  }
+}
+
+function syncView() {
+  const home = !currentPlugin;
+  $("home").hidden = !home;
+  $("workspace").hidden = home;
+  document.body.classList.toggle("is-home", home);
+  document.body.classList.toggle("is-workspace", !home);
+  if (home) return;
+  $("desk-view").hidden = workspaceMode !== "desk";
+  $("new-view").hidden = workspaceMode !== "new";
+  $("job-view").hidden = workspaceMode !== "job";
+}
+
+function setWizardStep(step) {
+  wizardStep = step;
+  $("step-customer").hidden = step !== 1;
+  $("step-files").hidden = step !== 2;
+  $("step-confirm").hidden = step !== 3;
+  $("wizard-nav").querySelectorAll("[data-step]").forEach(item => {
+    item.classList.toggle("active", Number(item.dataset.step) === step);
+  });
+}
+
+function pushWorkbench(path, fromHistory) {
+  const next = "#" + path;
+  if (fromHistory || location.hash === next) return;
+  history.pushState({workbench: path}, "", next);
+}
+
+function renderPlugins() {
+  const groups = {};
+  plugins.forEach(item => {
+    groups[item.group] = groups[item.group] || [];
+    groups[item.group].push(item);
+  });
+  $("plugin-list").innerHTML = Object.entries(groups).map(([group, items]) =>
+    `<section class="menu-group"><h2>${esc(group)}</h2><div class="plugin-list">` + items.map(item => {
+      const live = liveCount(item.id);
+      const total = pluginTasks(item.id).length;
+      const pills = [
+        item.placeholder ? `<span class="pill pill-amber">占位</span>` : "",
+        item.task_kind === "uk_vat" ? `<span class="pill pill-blue">本机 Chrome</span>` : "",
+        item.id === "translate-id" ? `<span class="pill pill-purple">本机识别</span>` : "",
+        live ? `<span class="pill pill-count">进行中 ${live}</span>` : (total ? `<span class="pill">${total} 个任务</span>` : "")
+      ].join("");
+      return `<button class="plugin" data-id="${esc(item.id)}" type="button">
+        <span class="row-top"><span class="name">${esc(item.name)}</span></span>
+        <small>${esc(item.description)}</small>
+        <span class="plugin-foot">${pills}</span>
+      </button>`;
+    }).join("") + `</div></section>`
+  ).join("");
+  $("plugin-list").querySelectorAll(".plugin").forEach(button => {
+    button.addEventListener("click", () => selectPlugin(button.dataset.id));
+  });
+  renderHomeLive();
+}
+
+function renderHomeLive() {
+  const live = tasks.filter(item => ["in_progress", "waiting", "reviewing"].includes(item.status));
+  const box = $("home-live");
+  if (!live.length) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = live.map(item =>
+    `<button type="button" data-task="${esc(item.id)}">
+      继续 ${esc(item.plugin_name)} · ${esc(item.customer_name || "")}
+      <span>${esc(statusLabel(item.status))}${item.message ? " · " + esc(item.message) : ""}</span>
+    </button>`
+  ).join("");
+  box.querySelectorAll("[data-task]").forEach(button => {
+    button.addEventListener("click", () => selectTask(button.dataset.task));
+  });
+}
+
+function fillFileCategories() {
+  const rules = intakeFiles();
+  const options = rules.length
+    ? rules.map(item => `<option value="${esc(item.category)}">${esc(item.label || CATEGORY_LABELS[item.category] || item.category)}</option>`)
+    : Object.entries(CATEGORY_LABELS).map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`);
+  $("file-category").innerHTML = options.join("");
+  $("file-intake-hint").textContent = rules.length
+    ? rules.map(item => {
+        const bits = [];
+        if (item.min) bits.push("至少 " + item.min + " 张");
+        if (item.max) bits.push("最多 " + item.max + " 张");
+        if (!bits.length) bits.push("可选");
+        return `${item.label || item.category}${bits.join("、")}`;
+      }).join("；") + "。"
+    : "按需上传并勾选本次要用的文件。";
+}
+
+function selectPlugin(id, fromHistory) {
+  const previous = currentPlugin && currentPlugin.id;
+  currentPlugin = plugins.find(item => item.id === id) || null;
+  if (!currentPlugin) {
+    if (fromHistory) showHome();
+    else goHome();
+    return;
+  }
+  $("plugin-group").textContent = currentPlugin.group;
+  $("plugin-title").textContent = currentPlugin.name;
+  $("plugin-desc").textContent = currentPlugin.description;
+  $("placeholder-box").style.display = currentPlugin.placeholder ? "block" : "none";
+  if (!fromHistory && previous !== currentPlugin.id) {
+    workspaceMode = "desk";
+    selectedTaskId = "";
+    pushWorkbench(currentPlugin.id, fromHistory);
+  }
+  fillFileCategories();
+  adaptWizardForPlugin();
+  syncView();
+  syncCreateEnabled();
+  renderTasks();
+  renderJob();
+}
+
+function openDesk(fromHistory) {
+  workspaceMode = "desk";
+  selectedTaskId = "";
+  if (currentPlugin) pushWorkbench(currentPlugin.id, fromHistory);
+  syncView();
+  renderTasks();
+}
+
+function openNew(fromHistory) {
+  workspaceMode = "new";
+  wizardStep = 1;
+  setWizardStep(1);
+  if (currentPlugin) pushWorkbench(currentPlugin.id + "/new", fromHistory);
+  syncView();
+  renderCustomerDetail();
+  syncCreateEnabled();
+}
+
+function renderCustomers() {
+  const selected = $("customer-select").value;
+  $("customer-select").innerHTML = `<option value="">新建客户</option>` +
+    customers.map(item => `<option value="${esc(item.id)}">${esc(item.name)}${item.project_code ? " · " + esc(item.project_code) : ""}</option>`).join("");
+  if (selected) $("customer-select").value = selected;
+}
+function renderCustomerDetail() {
+  const customer = selectedCustomer();
+  const files = customer?.files || [];
+  const rules = intakeFiles();
+  const wanted = new Set(rules.map(item => item.category));
+  const picked = {};
+  $("customer-files").innerHTML = files.length
+    ? files.map(item => {
+        const rule = rules.find(entry => entry.category === item.category);
+        const cap = Number(rule && rule.max ? rule.max : 0);
+        const used = picked[item.category] || 0;
+        const auto = !wanted.size || (wanted.has(item.category) && (!cap || used < cap));
+        if (auto) picked[item.category] = used + 1;
+        return `<li class="file-row">
+          <span class="cat pill">${esc(CATEGORY_LABELS[item.category] || item.category)}</span>
+          <label>
+            <input type="checkbox" data-file="${esc(item.id)}" data-category="${esc(item.category)}" ${auto ? "checked" : ""}>
+            <span>${esc(item.name)}</span>
+          </label>
+        </li>`;
+      }).join("")
+    : `<li class="empty">${currentCustomerId ? "还没有文件。按上方要求上传。" : "还没有文件。先保存客户，再上传资料。"}</li>`;
+  $("customer-files").querySelectorAll("[data-file]").forEach(box => {
+    box.addEventListener("change", () => enforceFileMax(box));
+  });
+  const fields = customer?.fields || {};
+  const keys = Object.keys(fields);
+  $("field-picks").innerHTML = keys.length
+    ? keys.map(key =>
+        `<label class="pick-row"><input type="checkbox" data-pick-field="${esc(key)}" checked>
+          <span>${esc(fieldLabel(key))}<span class="file-meta">${esc(fields[key])}</span></span>
+        </label>`
+      ).join("")
+    : `<p class="hint">暂无结构化字段，可先解析授权表。</p>`;
+}
+function matchesFilter(item) {
+  if (taskFilter === "live") return ["in_progress", "waiting", "reviewing"].includes(item.status);
+  if (taskFilter === "hold") return ["open", "queued", "blocked", "failed"].includes(item.status);
+  if (taskFilter === "done") return item.status === "delivered";
+  return true;
+}
+function renderTasks() {
+  const scoped = currentPlugin ? pluginTasks(currentPlugin.id) : [];
+  const visible = scoped.filter(matchesFilter);
+  const counts = {
+    live: scoped.filter(item => ["in_progress", "waiting", "reviewing"].includes(item.status)).length,
+    hold: scoped.filter(item => ["open", "queued", "blocked", "failed"].includes(item.status)).length,
+    done: scoped.filter(item => item.status === "delivered").length
+  };
+  $("task-filters").querySelector('[data-filter="all"]').textContent = `全部 ${scoped.length}`;
+  $("task-filters").querySelector('[data-filter="live"]').textContent = `进行中 ${counts.live}`;
+  $("task-filters").querySelector('[data-filter="hold"]').textContent = `待处理 ${counts.hold}`;
+  $("task-filters").querySelector('[data-filter="done"]').textContent = `已交付 ${counts.done}`;
+  $("task-list").innerHTML = visible.length
+    ? visible.map(item => {
+        const files = (item.result_files || []).map(file =>
+          `<a href="/api/tasks/${esc(item.id)}/files/${esc(file.id)}" target="_blank" rel="noopener">${esc(file.name)}</a>`
+        ).join(" · ");
+        const selected = selectedTaskId === item.id;
+        return `<article class="task${selected ? " active" : ""}" data-task="${esc(item.id)}" tabindex="0" role="button">
+          <div class="task-top">
+            <b>${esc(item.customer_name || item.plugin_name)}</b>
+            <span class="badge ${esc(item.status)}">${esc(statusLabel(item.status))}</span>
+          </div>
+          <div class="meta">${esc(item.message || "")}${formatWhen(item.updated_at || item.created_at) ? " · " + esc(formatWhen(item.updated_at || item.created_at)) : ""}</div>
+          ${files ? `<div class="meta">${files}</div>` : ""}
+        </article>`;
+      }).join("")
+    : isTranslateId()
+      ? `<div class="empty"><strong>这项业务还没有任务</strong>点「新建」：选客户，上传身份证正反面，创建后识别、核对，再生成翻译件 PDF。</div>`
+      : `<div class="empty"><strong>这项业务还没有任务</strong>点右上角「新建」开第一笔。</div>`;
+  $("task-list").querySelectorAll("[data-task]").forEach(card => {
+    const open = () => selectTask(card.dataset.task);
+    card.addEventListener("click", event => {
+      if (event.target.closest("a")) return;
+      open();
+    });
+    card.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    });
+  });
+  const translateTasks = currentPlugin
+    ? tasks.filter(item => item.plugin_id === currentPlugin.id && item.task_kind === "translate")
+    : [];
+  const previous = $("translate-task").value;
+  $("translate-task").innerHTML = translateTasks.length
+    ? translateTasks.map(item =>
+        `<option value="${esc(item.id)}">${esc(item.title || item.id)}</option>`
+      ).join("")
+    : `<option value="">还没有翻译任务</option>`;
+  if (previous && translateTasks.some(item => item.id === previous)) {
+    $("translate-task").value = previous;
+  }
+}
+
+function applyCustomer(customer) {
+  $("customer-name").value = customer?.name || "";
+  $("project-code").value = customer?.project_code || "";
+  $("customer-notes").value = customer?.notes || "";
+  fillFields(customer?.fields || {});
+  renderCustomerDetail();
+  syncCreateEnabled();
+}
+function selectedTask() {
+  return tasks.find(item => item.id === selectedTaskId) || null;
+}
+function renderIdCardFields(fields, translated) {
+  const keys = Object.keys(ID_CARD_LABELS);
+  const hasValue = keys.some(key => (fields || {})[key]);
+  if (!hasValue) {
+    $("id-card-fields").innerHTML = `<p class="hint">还没有识别结果。创建任务时勾选正反面照片，再点「识别证件字段」。</p>`;
+    return;
+  }
+  $("id-card-fields").innerHTML = keys.map(key => {
+    const english = translated && translated[key];
+    return `<label>${esc(ID_CARD_LABELS[key])}<input data-id-field="${esc(key)}" value="${esc((fields || {})[key] || "")}">${
+      english ? `<span class="id-card-en">${esc(english)}</span>` : ""
+    }</label>`;
+  }).join("");
+}
+function renderJob() {
+  const task = selectedTask();
+  const isUk = currentPlugin && currentPlugin.task_kind === "uk_vat";
+  const isTranslate = currentPlugin && currentPlugin.task_kind === "translate";
+  const isIdCard = currentPlugin && currentPlugin.id === "translate-id";
+  if (!task) {
+    $("job-heading").textContent = "任务";
+    $("job-meta").textContent = "";
+    $("job-badge").textContent = "";
+    $("job-files").textContent = "";
+    $("uk-vat-box").style.display = "none";
+    $("id-card-box").style.display = "none";
+    $("translate-box").style.display = "none";
+    $("id-card-download-wrap").hidden = true;
+    $("run-status").style.display = "none";
+    $("otp").style.display = "none";
+    return;
+  }
+  $("job-heading").textContent = task.customer_name || task.title || currentPlugin.name;
+  $("job-meta").textContent = isIdCard
+    ? formatWhen(task.updated_at || task.created_at)
+    : [task.message || "", formatWhen(task.updated_at || task.created_at)].filter(Boolean).join(" · ");
+  $("job-badge").className = "badge " + (task.status || "");
+  $("job-badge").textContent = statusLabel(task.status);
+  const selected = task.selected_files || [];
+  const results = task.result_files || [];
+  $("job-files").innerHTML = [
+    selected.length ? "资料：" + selected.map(item => esc(item.name)).join("、") : "",
+    results.map(item => `<a href="/api/tasks/${esc(task.id)}/files/${esc(item.id)}" target="_blank" rel="noopener">${esc(item.name)}</a>`).join(" · ")
+  ].filter(Boolean).join("<br>");
+  const started = ["in_progress", "waiting", "reviewing", "delivered", "blocked"].includes(task.status);
+  $("uk-vat-box").style.display = isUk && !started ? "block" : "none";
+  $("start-uk-vat").style.display = isUk && !started ? "inline-block" : "none";
+  $("id-card-box").style.display = isIdCard ? "block" : "none";
+  $("translate-box").style.display = isTranslate && !isIdCard ? "block" : "none";
+  if (isIdCard) {
+    const extracted = task.extracted_id_card || {};
+    renderIdCardFields(extracted.fields || {}, extracted.translated || {});
+    const pdf = (task.result_files || []).find(item => item.kind === "translation" || /\.pdf$/i.test(item.name || ""));
+    $("id-card-download-wrap").hidden = !pdf;
+    if (pdf) $("id-card-download").href = `/api/tasks/${esc(task.id)}/files/${esc(pdf.id)}`;
+    const err = extracted.translate_error || (task.status === "blocked" ? task.message : "");
+    if (err) {
+      $("id-card-msg").className = "msg error";
+      $("id-card-msg").textContent = err;
+    } else if (task.status === "delivered") {
+      $("id-card-msg").className = "msg ok";
+      $("id-card-msg").textContent = "已生成两页 PDF：第 1 页译文正反面，第 2 页原件正反面";
+    } else if (extracted.fields && Object.keys(extracted.fields).length) {
+      $("id-card-msg").className = "msg ok";
+      $("id-card-msg").textContent = "已抽出字段，请核对";
+    } else {
+      $("id-card-msg").className = "msg";
+      $("id-card-msg").textContent = "";
+    }
+  } else {
+    $("id-card-download-wrap").hidden = true;
+  }
+  if (isUk && started) showUkStatus(task);
+  else if (isIdCard) {
+    $("run-status").style.display = "none";
+    $("otp").style.display = "none";
+  } else {
+    $("run-status").style.display = started ? "block" : "none";
+    if (started) {
+      $("run-status").className = "status " + (task.status || "");
+      $("run-status").textContent = task.message || statusLabel(task.status);
+    }
+    $("otp").style.display = "none";
+  }
+  if (isTranslate) $("translate-task").value = task.id;
+  $("translate-task").hidden = !!selectedTaskId;
+  const taskLabel = $("translate-task").previousElementSibling;
+  if (taskLabel && taskLabel.tagName === "LABEL") taskLabel.hidden = !!selectedTaskId;
+}
+function selectTask(id, fromHistory) {
+  const task = tasks.find(item => item.id === id);
+  if (!task) return;
+  selectedTaskId = task.id;
+  if (task.plugin_id) selectPlugin(task.plugin_id, true);
+  if (task.customer_id) {
+    currentCustomerId = task.customer_id;
+    $("customer-select").value = currentCustomerId;
+    applyCustomer(selectedCustomer());
+  }
+  if (task.task_kind === "uk_vat") currentUkTaskId = task.id;
+  workspaceMode = "job";
+  if (currentPlugin) pushWorkbench(currentPlugin.id + "/" + task.id, fromHistory);
+  syncView();
+  renderJob();
+  renderTasks();
+  syncCreateEnabled();
+}
+function showUkStatus(task) {
+  $("run-status").style.display = "block";
+  $("run-status").className = "status " + (task.status || "");
+  $("run-status").textContent = task.message || statusLabel(task.status);
+  const snap = task.uk_vat || {};
+  $("otp").style.display = snap.status === "waiting_code" ? "block" : "none";
+}
+
+function applyHash() {
+  const {plugin, rest} = hashParts();
+  if (plugin && plugins.some(item => item.id === plugin)) {
+    selectPlugin(plugin, true);
+    if (rest === "new") openNew(true);
+    else if (rest) selectTask(rest, true);
+    else openDesk(true);
+  } else {
+    showHome();
+  }
+}
+
+function enforceFileMax(changed) {
+  const cat = changed.dataset.category;
+  const rule = intakeFiles().find(item => item.category === cat);
+  const max = Number(rule && rule.max ? rule.max : 0);
+  if (!max || !changed.checked) return;
+  document.querySelectorAll(`[data-file][data-category="${cat}"]`).forEach(box => {
+    if (box !== changed) box.checked = false;
+  });
+}
+function step2Ready() {
+  const files = selectedCustomer()?.files || [];
+  const checked = new Set([...document.querySelectorAll("[data-file]:checked")].map(item => item.dataset.file));
+  return intakeFiles().every(rule => {
+    const min = Number(rule.min || 0);
+    const max = Number(rule.max || 0);
+    const count = files.filter(item => item.category === rule.category && checked.has(item.id)).length;
+    if (min && count < min) return false;
+    if (max && count > max) return false;
+    return true;
+  });
+}
+
+async function refresh() {
+  const [me, pluginData, customerData, taskData] = await Promise.all([
+    api("/api/me"), api("/api/plugins"), api("/api/customers"), api("/api/tasks")
+  ]);
+  $("who").textContent = me.user;
+  plugins = pluginData.plugins;
+  customers = customerData.customers;
+  tasks = taskData.tasks;
+  renderPlugins();
+  renderCustomers();
+  if (currentCustomerId) {
+    $("customer-select").value = currentCustomerId;
+    applyCustomer(selectedCustomer());
+  } else {
+    renderCustomerDetail();
+  }
+  if (currentPlugin) {
+    currentPlugin = plugins.find(item => item.id === currentPlugin.id) || currentPlugin;
+    fillFileCategories();
+    renderTasks();
+    if (workspaceMode === "job") {
+      renderJob();
+      const task = selectedTask();
+      if (task && task.task_kind === "uk_vat" && ["in_progress", "waiting", "reviewing"].includes(task.status)) {
+        currentUkTaskId = task.id;
+        showUkStatus(task);
+      }
+    }
+  } else {
+    applyHash();
+  }
+  syncCreateEnabled();
+}
+
+$("home-link").addEventListener("click", goHome);
+$("back-home").addEventListener("click", goHome);
+$("back-desk").addEventListener("click", () => openDesk());
+$("back-desk-job").addEventListener("click", () => openDesk());
+$("new-task").addEventListener("click", () => openNew());
+$("wizard-next-1").addEventListener("click", () => { if (currentCustomerId) setWizardStep(2); });
+$("wizard-prev-2").addEventListener("click", () => setWizardStep(1));
+$("wizard-next-2").addEventListener("click", () => {
+  if (!step2Ready()) {
+    $("file-msg").className = "msg error";
+    $("file-msg").textContent = $("file-intake-hint").textContent;
+    return;
+  }
+  setWizardStep(3);
+});
+$("wizard-prev-3").addEventListener("click", () => setWizardStep(2));
+window.addEventListener("popstate", () => {
+  if (plugins.length) applyHash();
+});
+$("logout").addEventListener("click", async () => {
+  await fetch("/api/logout", {method: "POST", headers: {"x-csrf-token": csrf(), "Content-Type": "application/json"}, body: "{}"});
+  location.href = "/login";
+});
+$("customer-select").addEventListener("change", () => {
+  currentCustomerId = $("customer-select").value;
+  applyCustomer(selectedCustomer());
+});
+$("task-filters").addEventListener("click", event => {
+  const button = event.target.closest("[data-filter]");
+  if (!button) return;
+  taskFilter = button.dataset.filter;
+  $("task-filters").querySelectorAll("[data-filter]").forEach(item => {
+    item.classList.toggle("active", item === button);
+  });
+  renderTasks();
+});
+$("save-customer").addEventListener("click", async () => {
+  try {
+    const record = await api("/api/customers", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        id: currentCustomerId, name: $("customer-name").value, project_code: $("project-code").value,
+        notes: $("customer-notes").value, fields: fieldsFromForm()
+      })
+    });
+    currentCustomerId = record.id;
+    $("customer-msg").className = "msg ok";
+    $("customer-msg").textContent = "客户已保存";
+    await refresh();
+    $("customer-select").value = currentCustomerId;
+    syncCreateEnabled();
+  } catch (error) {
+    $("customer-msg").className = "msg error";
+    $("customer-msg").textContent = error.message;
+  }
+});
+$("upload-file").addEventListener("click", async () => {
+  if (!currentCustomerId) { $("file-msg").className = "msg error"; $("file-msg").textContent = "请先保存客户"; return; }
+  const file = $("customer-file").files[0];
+  if (!file) { $("file-msg").className = "msg error"; $("file-msg").textContent = "请选择文件"; return; }
+  const data = new FormData();
+  data.append("file", file);
+  try {
+    await api(`/api/customers/${currentCustomerId}/files?category=${$("file-category").value}`, {method: "POST", body: data});
+    $("file-msg").className = "msg ok";
+    $("file-msg").textContent = "已上传";
+    await refresh();
+    $("customer-select").value = currentCustomerId;
+    renderCustomerDetail();
+  } catch (error) {
+    $("file-msg").className = "msg error";
+    $("file-msg").textContent = error.message;
+  }
+});
+$("parse-file").addEventListener("click", async () => {
+  const checked = [...document.querySelectorAll("[data-file]:checked")];
+  const parseable = checked.find(item => item.dataset.category === "authorization") || checked[0];
+  if (!currentCustomerId || !parseable) { $("file-msg").className = "msg error"; $("file-msg").textContent = "请勾选要解析的授权表"; return; }
+  try {
+    const result = await api(`/api/customers/${currentCustomerId}/parse/${parseable.dataset.file}`, {method: "POST"});
+    fillFields(result.values || {});
+    $("file-msg").className = "msg ok";
+    $("file-msg").textContent = "已解析并写入客户资料";
+    await refresh();
+    $("customer-select").value = currentCustomerId;
+    renderCustomerDetail();
+  } catch (error) {
+    $("file-msg").className = "msg error";
+    $("file-msg").textContent = error.message;
+  }
+});
+$("create-task").addEventListener("click", async () => {
+  if (!currentPlugin || !currentCustomerId) { $("task-msg").className = "msg error"; $("task-msg").textContent = "请选择业务和客户"; return; }
+  const field_keys = [...document.querySelectorAll("[data-pick-field]:checked")].map(item => item.dataset.pickField);
+  const file_ids = [...document.querySelectorAll("[data-file]:checked")].map(item => item.dataset.file);
+  try {
+    const task = await api("/api/tasks", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({plugin_id: currentPlugin.id, customer_id: currentCustomerId, field_keys, file_ids})
+    });
+    currentUkTaskId = task.task_kind === "uk_vat" ? task.id : currentUkTaskId;
+    selectedTaskId = task.id;
+    $("task-msg").className = "msg ok";
+    $("task-msg").textContent = task.placeholder ? "已占位" : "任务已创建";
+    await refresh();
+    selectTask(task.id);
+  } catch (error) {
+    $("task-msg").className = "msg error";
+    $("task-msg").textContent = error.message;
+  }
+});
+$("start-uk-vat").addEventListener("click", async () => {
+  if (!currentUkTaskId) { $("task-msg").className = "msg error"; $("task-msg").textContent = "请先创建英国 VAT 任务"; return; }
+  const customer = selectedCustomer() || {};
+  try {
+    await api(`/api/tasks/${currentUkTaskId}/uk-vat/start`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        extracted_confirmed: $("extracted-ok").checked,
+        extracted_values: customer.fields || {},
+        credentials: {
+          HMRC_EMAIL: $("hmrc-email").value, HMRC_PASSWORD: $("hmrc-password").value,
+          HMRC_MFA_PHONE: $("hmrc-phone").value, HMRC_SIGN_IN_METHOD: "Create new sign in details",
+          HMRC_MFA_PHONE_IS_UK: "No", HMRC_MFA_PHONE_COUNTRY: "China",
+          HMRC_IS_TAX_AGENT: "No", HMRC_ACCESS_AS_BUSINESS: "Yes",
+          HMRC_FULL_NAME: (customer.fields || {}).full_name || ""
+        }
+      })
+    });
+    $("hmrc-password").value = "";
+    await refresh();
+    renderJob();
+  } catch (error) {
+    $("run-status").style.display = "block";
+    $("run-status").className = "status blocked";
+    $("run-status").textContent = error.message;
+  }
+});
+$("send-code").addEventListener("click", async () => {
+  if (!currentUkTaskId) return;
+  try {
+    await api(`/api/tasks/${currentUkTaskId}/uk-vat/code`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code: $("code").value})
+    });
+    $("code").value = "";
+  } catch (error) {
+    $("run-status").style.display = "block";
+    $("run-status").className = "status blocked";
+    $("run-status").textContent = error.message;
+  }
+});
+async function uploadTranslate(kind) {
+  const taskId = $("translate-task").value || selectedTaskId;
+  const file = $("translate-file").files[0];
+  if (!taskId || !file) { $("translate-msg").className = "msg error"; $("translate-msg").textContent = "请选择任务和文件"; return; }
+  const data = new FormData();
+  data.append("file", file);
+  try {
+    await api(`/api/tasks/${taskId}/translate/${kind}`, {method: "POST", body: data});
+    $("translate-msg").className = "msg ok";
+    $("translate-msg").textContent = kind === "source" ? "原件已上传" : "译文已回传";
+    await refresh();
+    renderJob();
+  } catch (error) {
+    $("translate-msg").className = "msg error";
+    $("translate-msg").textContent = error.message;
+  }
+}
+function idCardFieldsFromForm() {
+  const fields = {};
+  document.querySelectorAll("[data-id-field]").forEach(input => {
+    if (input.value.trim()) fields[input.dataset.idField] = input.value.trim();
+  });
+  return fields;
+}
+$("id-card-pdf").addEventListener("click", async () => {
+  if (!selectedTaskId) return;
+  $("id-card-pdf").disabled = true;
+  $("id-card-msg").className = "msg";
+  $("id-card-msg").textContent = "正在生成翻译件（住址/签发机关按配置走云翻译）…";
+  try {
+    const result = await api(`/api/tasks/${selectedTaskId}/id-card/confirm`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({fields: idCardFieldsFromForm()})
+    });
+    $("id-card-msg").className = "msg ok";
+    $("id-card-msg").textContent = "已生成两页 PDF：第 1 页译文正反面，第 2 页原件正反面";
+    renderIdCardFields(idCardFieldsFromForm(), result.translated || {});
+    if (result.file && result.file.id) {
+      $("id-card-download-wrap").hidden = false;
+      $("id-card-download").href = `/api/tasks/${selectedTaskId}/files/${result.file.id}`;
+    }
+    await refresh();
+  } catch (error) {
+    $("id-card-msg").className = "msg error";
+    $("id-card-msg").textContent = error.message;
+  } finally {
+    $("id-card-pdf").disabled = false;
+  }
+});
+$("id-card-ocr").addEventListener("click", async () => {
+  if (!selectedTaskId) return;
+  $("id-card-ocr").disabled = true;
+  $("id-card-msg").className = "msg";
+  $("id-card-msg").textContent = "正在识别，首次加载模型可能需要较长时间…";
+  try {
+    const result = await api(`/api/tasks/${selectedTaskId}/id-card/ocr`, {method: "POST"});
+    renderIdCardFields(result.fields || {});
+    $("id-card-msg").className = "msg ok";
+    $("id-card-msg").textContent = "已抽出字段，请核对";
+    await refresh();
+  } catch (error) {
+    $("id-card-msg").className = "msg error";
+    $("id-card-msg").textContent = error.message;
+  } finally {
+    $("id-card-ocr").disabled = false;
+  }
+});
+$("upload-source").addEventListener("click", () => uploadTranslate("source"));
+$("upload-translation").addEventListener("click", () => uploadTranslate("translation"));
+
+refresh().catch(error => { $("task-msg").textContent = error.message; });
+setInterval(() => refresh().catch(() => {}), 4000);
+</script>
+</body>
+</html>

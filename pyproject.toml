@@ -9,19 +9,29 @@ description = "Configuration-driven browser automation for the UK VAT registrati
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
   "playwright>=1.46,<2",
+  "pillow>=10,<13",
   "pypdf>=5,<7",
+  "pypinyin>=0.50,<1",
   "python-multipart>=0.0.20,<1",
   "uvicorn>=0.30,<1",
+]
+
+[project.optional-dependencies]
+ocr = [
+  "paddleocr>=3.0",
 ]
 
 [project.scripts]
 vat-register = "vat_automation.cli:main"
 vat-web = "vat_automation.web:main"
 vat-web-user = "vat_automation.auth:main"
+vat-bench = "workbench.app:main"
 
 [tool.setuptools.packages.find]
-include = ["vat_automation*"]
+include = ["vat_automation*", "workbench*"]
 
 [tool.setuptools.package-data]
 vat_automation = ["static/*.html"]
+workbench = ["static/*.html", "static/*.css"]

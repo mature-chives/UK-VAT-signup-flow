@@ -135,6 +135,21 @@ vat-register --config vat-config.test.json
 
 首次开户时，程序会自动选择 `Create new sign in details`、回答主体问题、填写邮箱、姓名和密码，并选择验证方式；邮箱验证码和手机验证码到达后，在终端提示处输入即可继续。已有账号登录时，可将 `HMRC_SIGN_IN_METHOD` 改为 `Government Gateway`，并额外提供 `HMRC_USER_ID`。凭据和验证码不会写入审计日志。
 
+## 销售交付工作台
+
+业务菜单由插件登记，不写死种类。新增一种业务=增加一个插件模块并 `register()`。销售与交付暂用同一套菜单；客户资料可在多个任务间勾选复用。英国 VAT 的 Chrome 仍在服务器本机运行，同事只看状态和验证码。
+
+证件识别需要已安装 `paddleocr` 的 Python（可选 extra：`pip install -e '.[ocr]'`）。百度翻译密钥放项目根目录 `.env`（已忽略，模板见 `.env.example`），启动时自动读入。
+
+```bash
+cp .env.example .env
+# 填 TRANSLATE_APP_ID / TRANSLATE_API_KEY
+.venv/bin/python -m pip install -e .
+.venv/bin/vat-bench --uk-vat-config vat-config.flow.json
+```
+
+默认 [http://127.0.0.1:8770](http://127.0.0.1:8770)。内置插件：英国 VAT 注册（接入现有自动化）、翻译证件照（本机识别后生成两页英文 PDF）、翻译营业执照 / POA（回传译文）、沙特 VAT 注册（占位）。数据在 `workbench-data/`，默认不入库。不要把密钥写入 JSON 或提交 `.env`。
+
 ## 本地 Web UI
 
 安装依赖后直接启动：

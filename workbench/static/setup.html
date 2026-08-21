@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>初始化 · 销售交付工作台</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="app-header auth-header">
+  <div class="bar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <strong>销售交付工作台</strong>
+        <small>首次启动，创建管理员</small>
+      </div>
+    </div>
+  </div>
+</header>
+<main class="auth-main">
+  <section class="card auth-card">
+    <h1>创建管理员账号</h1>
+    <p class="lede">这是本机工作台的第一个账号，之后销售和交付都从这里登录。</p>
+    <div class="notice warn">初始化码在启动 <code>vat-bench</code> 的终端里，仅本次启动有效。</div>
+    <form id="setup-form">
+      <label for="token">初始化码</label>
+      <input id="token" required autocomplete="off">
+      <label for="username">管理员用户名</label>
+      <input id="username" required autocomplete="username" autocapitalize="none">
+      <p class="hint">小写字母、数字、点、下划线或短横线，2-32 个字符。</p>
+      <label for="password">密码</label>
+      <input id="password" type="password" required minlength="12" autocomplete="new-password">
+      <label for="password2">再次输入密码</label>
+      <input id="password2" type="password" required minlength="12" autocomplete="new-password">
+      <button id="submit" type="submit">创建并进入</button>
+      <div id="error" class="msg error"></div>
+    </form>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+$("setup-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  if ($("password").value !== $("password2").value) {
+    $("error").textContent = "两次输入的密码不一致。";
+    return;
+  }
+  $("submit").disabled = true;
+  try {
+    const response = await fetch("/api/setup", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({token: $("token").value.trim(), username: $("username").value, password: $("password").value})
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || "初始化失败");
+    window.location.replace("/");
+  } catch (error) {
+    $("error").textContent = error.message;
+    $("submit").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
