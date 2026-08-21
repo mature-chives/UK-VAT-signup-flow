@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -537,3 +538,418 @@ setInterval(refresh,1000); refresh();
 </script>
 </body>
 </html>
+=======
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UK VAT 注册助手</title>
+  <style>
+    :root { color-scheme:light; --ink:#18212b; --muted:#66717d; --blue:#1d70b8; --green:#00703c; --red:#d4351c; --bg:#f3f5f7; --line:#d6dbe0; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    header { background:#0b0c0c; color:white; padding:18px 0; }
+    header div,main { width:min(1080px,calc(100% - 32px)); margin:auto; }
+    header div { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+    header strong { font-size:22px; }
+    header .who { font-size:14px; color:#c9ced3; }
+    header button { margin:0; padding:6px 14px; background:transparent; border:1px solid #6d7378; color:white; border-radius:3px; font:600 14px inherit; cursor:pointer; box-shadow:none; }
+    main { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr); gap:24px; padding:32px 0 56px; }
+    .card { background:white; border:1px solid var(--line); border-radius:10px; padding:24px; box-shadow:0 2px 10px #0000000d; }
+    h1,h2,h3 { margin:0 0 16px; line-height:1.25; } h1 { font-size:30px; } h2 { font-size:21px; } h3 { font-size:18px; margin-top:26px; }
+    label { display:block; font-weight:650; margin:14px 0 6px; }
+    input,select,textarea { width:100%; padding:10px 12px; border:2px solid #505a5f; border-radius:3px; font:inherit; background:white; }
+    textarea { min-height:82px; resize:vertical; }
+    input:focus,select:focus,textarea:focus { outline:3px solid #ffdd00; border-color:#0b0c0c; }
+    input[type=file] { border:1px dashed #7a858e; background:#fafafa; }
+    input[readonly] { background:#eef1f3; border-style:dashed; color:var(--muted); }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    button { margin-top:14px; padding:10px 18px; border:0; border-radius:3px; background:var(--green); color:white; font:700 16px inherit; cursor:pointer; box-shadow:0 2px 0 #003d20; }
+    button.secondary { background:var(--blue); box-shadow:0 2px 0 #003b67; }
+    button.danger { background:var(--red); box-shadow:0 2px 0 #7a1d0f; }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .section { border-top:1px solid var(--line); margin-top:24px; padding-top:4px; }
+    .hint,.meta { overflow-wrap:anywhere; color:var(--muted); font-size:14px; margin-top:5px; }
+    .notice { padding:12px 14px; margin-bottom:20px; font-size:14px; background:#fff7bf; border-left:5px solid #ffdd00; }
+    .local { color:#004f2d; background:#e8f4ee; border-left-color:var(--green); }
+    .message { min-height:22px; margin-top:8px; font-size:14px; }
+    .message.error { color:var(--red); }
+    .message.ok { color:var(--green); }
+    .warnings { color:#7a3b00; padding-left:22px; }
+    .fields { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; margin-top:10px; }
+    .fields .wide { grid-column:1/-1; }
+    details { margin-top:20px; border:1px solid var(--line); padding:12px 14px; }
+    summary { cursor:pointer; font-weight:700; }
+    .status { border-left:6px solid var(--blue); padding:13px 15px; background:#eaf4fb; margin-bottom:18px; }
+    .status.waiting_code { border-color:#f47738; background:#fff3e8; }
+    .status.pausing,.status.paused { border-color:#ffdd00; background:#fff7bf; }
+    .status.reviewing { border-color:#4c2c92; background:#efeaf7; }
+    .status.failed,.status.stopped { border-color:var(--red); background:#fbeaea; }
+    .status.completed { border-color:var(--green); background:#e8f4ee; }
+    #otp { display:none; padding:16px; border:2px solid #f47738; margin:18px 0; background:#fff9f3; }
+    #busy { display:none; padding:12px 14px; margin-bottom:16px; font-size:14px; background:#fff7bf; border-left:5px solid #ffdd00; }
+    #review { display:none; margin-top:24px; }
+    .review-download { display:inline-block; margin:4px 0 10px; font-weight:700; }
+    .events { max-height:360px; overflow:auto; padding:0; list-style:none; border-top:1px solid var(--line); }
+    .events li { padding:9px 0; border-bottom:1px solid var(--line); font-size:13px; }
+    @media (max-width:800px) { main { grid-template-columns:1fr; } .row,.fields { grid-template-columns:1fr; } .fields .wide { grid-column:auto; } }
+  </style>
+</head>
+<body>
+<header><div><strong>GOV.UK VAT 注册助手 · 局域网私有版</strong><span><span id="who" class="who"></span> <button id="logout" type="button">退出</button></span></div></header>
+<main>
+  <section class="card">
+    <h1>准备注册资料</h1>
+    <div class="notice local">资料文档只在服务器本机解析，不调用外部 AI 或云端 API。身份证明按账号隔离保存在权限 0700 的私有临时目录，程序退出时删除。</div>
+    <div id="busy"></div>
+
+    <div>
+      <h2>1. 解析 VAT 资料文档</h2>
+      <input id="source-document" type="file" accept=".pdf,.docx,.xlsx,.txt,.json,.csv,.tsv">
+      <div class="hint">支持 PDF、DOCX、XLSX、TXT、JSON、CSV、TSV，最大 12MB。建议使用“字段名: 值”格式。</div>
+      <button id="parse-document" class="secondary" type="button">解析文档</button>
+      <div id="parse-message" class="message"></div>
+      <ul id="parse-warnings" class="warnings"></ul>
+      <div id="extracted-fields" class="fields"></div>
+      <button id="confirm-extraction" type="button" disabled>确认资料无误</button>
+      <div id="confirm-message" class="message"></div>
+      <div class="notice" style="margin-top:18px">固定自动化规则：标准税率营业额 £10,000；降低税率营业额 £0；零税率营业额 £0；SIC 行业代码 47910。这些值不从文档解析，也不在页面中修改。</div>
+    </div>
+
+    <form id="start-form">
+      <div class="section">
+        <h2>2. 验证信息</h2>
+        <div class="row">
+          <div><label for="email">接收邮箱验证码的邮箱</label><input id="email" type="email" autocomplete="email" required></div>
+          <div><label for="phone">接收短信验证码的手机号</label><input id="phone" type="tel" autocomplete="tel" required></div>
+        </div>
+        <label for="password">开户密码</label>
+        <input id="password" type="password" autocomplete="new-password" required>
+        <div class="hint">手机号国家默认 China，“是否英国手机号”默认 No。</div>
+      </div>
+
+      <div class="section">
+        <h2>3. 三份身份证明</h2>
+        <input id="identity-files" type="file" multiple accept=".jpg,.jpeg,.bmp,.png,.pdf,.doc,.docx,.xls,.xlsx,.gif,.txt">
+        <div class="hint">必须一次选择正好 3 份，每份最大 25MB。文件仅供后续 HMRC 页面自动上传。</div>
+        <button id="save-identity" class="secondary" type="button">保存到服务器私有临时区</button>
+        <div id="identity-message" class="message"></div>
+      </div>
+
+      <details>
+        <summary>高级设置</summary>
+        <label for="config">配置文件（由服务端启动参数固定）</label><input id="config" readonly>
+        <label for="method">登录方式</label>
+        <select id="method"><option>Create new sign in details</option><option>Government Gateway</option></select>
+        <label for="user-id">Gateway User ID（仅已有账号）</label><input id="user-id" autocomplete="off">
+        <label><input id="fresh" type="checkbox" checked style="width:auto"> 每次使用全新浏览器会话</label>
+      </details>
+
+      <button id="start" type="submit">开始 VAT 注册</button>
+      <div id="form-error" class="message error"></div>
+    </form>
+
+    <div id="review" class="section">
+      <h2>最终核对</h2>
+      <div class="notice">请逐项核对下方存档。确认操作不可撤销：确认后程序会点击 HMRC 的“Confirm and submit”，正式提交 VAT 注册申请。</div>
+      <a id="review-download" class="review-download" href="/api/final-review/pdf" download>下载完整 PDF 存档</a>
+      <label><input id="review-submit-consent" type="checkbox" style="width:auto"> 我确认资料真实、完整且无误，并同意正式提交到 HMRC</label>
+      <button id="review-confirm" class="danger" type="button" disabled>确认并提交到 HMRC</button>
+      <div id="review-message" class="message"></div>
+    </div>
+  </section>
+
+  <aside class="card">
+    <h2>运行状态</h2>
+    <div id="status" class="status">尚未启动</div>
+    <div id="otp">
+      <strong>请输入刚收到的验证码</strong>
+      <input id="code" autocomplete="one-time-code" placeholder="邮箱或短信验证码">
+      <button id="send-code" type="button">提交验证码</button>
+      <div id="code-error" class="message error"></div>
+    </div>
+    <div class="row">
+      <button id="pause" class="secondary" type="button" disabled>暂停自动化</button>
+      <button id="continue" type="button" disabled>应用修改并继续</button>
+    </div>
+    <div id="pause-error" class="message error"></div>
+    <div id="heading" class="meta"></div><div id="url" class="meta"></div>
+    <h2 style="margin-top:24px">最近操作</h2><ul id="events" class="events"></ul>
+
+    <div id="admin-panel" style="display:none">
+      <h2 style="margin-top:24px">账号管理</h2>
+      <ul id="user-list" class="events"></ul>
+      <label for="new-username">用户名</label>
+      <input id="new-username" autocomplete="off" autocapitalize="none" spellcheck="false">
+      <div class="hint">小写字母、数字、点、下划线或短横线，2-32 个字符。</div>
+      <label for="new-password">密码（至少 12 个字符）</label>
+      <input id="new-password" type="password" autocomplete="new-password">
+      <label style="font-weight:400"><input id="new-admin" type="checkbox" style="width:auto"> 授予管理员权限</label>
+      <button id="add-user" class="secondary" type="button">添加账号 / 重置密码</button>
+      <div id="admin-message" class="message"></div>
+    </div>
+  </aside>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const csrf = () => (document.cookie.match(/(?:^|;\s*)vat_csrf=([^;]*)/) || ['', ''])[1];
+let extractedValues = {};
+let extractedLabels = {};
+let identityCount = 0;
+let extractionConfirmed = false;
+
+async function post(url, body) {
+  const isForm = body instanceof FormData;
+  const headers = {'X-CSRF-Token': csrf()};
+  if (!isForm) headers['Content-Type'] = 'application/json';
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: body === undefined ? null : (isForm ? body : JSON.stringify(body))
+  });
+  if (response.status === 401) { window.location.href = '/login'; throw new Error('登录已过期'); }
+  return response;
+}
+
+function setMessage(id, text, kind='') {
+  const element = $(id); element.textContent = text; element.className = 'message ' + kind;
+}
+
+function syncExtractedValues() {
+  document.querySelectorAll('[data-extracted-key]').forEach(input => {
+    const value = input.value.trim();
+    if (value) extractedValues[input.dataset.extractedKey] = value;
+    else delete extractedValues[input.dataset.extractedKey];
+  });
+}
+
+function invalidateConfirmation(message='') {
+  extractionConfirmed = false;
+  if (message) setMessage('confirm-message', message, 'error');
+}
+
+function renderExtractedFields() {
+  const order = Object.keys(extractedLabels);
+  $('extracted-fields').innerHTML = order.map(key => {
+    const label = extractedLabels[key] || key;
+    const value = esc(extractedValues[key] || '');
+    const wide = ['business_description','premises','street'].includes(key) ? ' wide' : '';
+    const control = key === 'business_description'
+      ? `<textarea data-extracted-key="${key}">${value}</textarea>`
+      : `<input data-extracted-key="${key}" value="${value}">`;
+    return `<div class="${wide}"><label>${esc(label)}</label>${control}</div>`;
+  }).join('');
+  document.querySelectorAll('[data-extracted-key]').forEach(input => {
+    input.addEventListener('input', () => invalidateConfirmation('资料已修改，请重新确认。'));
+  });
+}
+
+$('logout').addEventListener('click', async () => {
+  await post('/api/logout');
+  window.location.href = '/login';
+});
+
+$('parse-document').addEventListener('click', async () => {
+  const file = $('source-document').files[0];
+  if (!file) { setMessage('parse-message', '请先选择资料文档。', 'error'); return; }
+  setMessage('parse-message', '正在服务器本机解析…');
+  const data = new FormData(); data.append('file', file);
+  try {
+    const response = await post('/api/parse-document', data);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '解析失败');
+    extractedValues = body.values || {}; extractedLabels = body.labels || {};
+    invalidateConfirmation();
+    renderExtractedFields();
+    $('confirm-extraction').disabled = false;
+    $('parse-warnings').innerHTML = (body.warnings || []).map(item => `<li>${esc(item)}</li>`).join('');
+    setMessage('parse-message', `解析完成，识别到 ${Object.keys(extractedValues).length} 个字段。请检查并修正下方内容。`, 'ok');
+  } catch (error) { setMessage('parse-message', error.message, 'error'); }
+});
+
+$('confirm-extraction').addEventListener('click', () => {
+  syncExtractedValues();
+  const required = ['project_code','application_reference','business_name','full_name','birth_date','email','phone','business_description','home_premises','home_street','home_city','home_country','premises','street','city','postcode','country'];
+  const missing = required.filter(key => !extractedValues[key]);
+  if (missing.length) {
+    const names = missing.map(key => extractedLabels[key] || key);
+    invalidateConfirmation('以下必要资料仍为空：' + names.join('、'));
+    const first = document.querySelector(`[data-extracted-key="${missing[0]}"]`);
+    if (first) first.focus();
+    return;
+  }
+  extractionConfirmed = true;
+  setMessage('confirm-message', '已确认当前提取资料无误。如再次修改任何字段，需要重新确认。', 'ok');
+});
+
+$('save-identity').addEventListener('click', async () => {
+  const files = [...$('identity-files').files];
+  if (files.length !== 3) { setMessage('identity-message', '请一次选择正好 3 份文件。', 'error'); return; }
+  setMessage('identity-message', '正在保存到服务器私有临时区…');
+  const data = new FormData(); files.forEach(file => data.append('files', file));
+  try {
+    const response = await post('/api/identity-documents', data);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '保存失败');
+    identityCount = body.count;
+    setMessage('identity-message', `已安全保存 ${body.count} 份：${body.names.join('、')}`, 'ok');
+  } catch (error) { identityCount = 0; setMessage('identity-message', error.message, 'error'); }
+});
+
+$('start-form').addEventListener('submit', async event => {
+  event.preventDefault(); setMessage('form-error', ''); syncExtractedValues();
+  if (!extractionConfirmed) { setMessage('form-error', '请先检查提取结果并点击“确认资料无误”。', 'error'); return; }
+  if (!extractedValues.full_name) { setMessage('form-error', '资料中缺少负责人姓名，请先解析文档或在提取结果中补充。', 'error'); return; }
+  if (identityCount !== 3) { setMessage('form-error', '请先保存正好三份身份证明文件。', 'error'); return; }
+  const credentials = {
+    HMRC_SIGN_IN_METHOD:$('method').value, HMRC_EMAIL:$('email').value,
+    HMRC_USER_ID:$('user-id').value, HMRC_PASSWORD:$('password').value,
+    HMRC_FULL_NAME:extractedValues.full_name, HMRC_MFA_METHOD:'Text message',
+    HMRC_MFA_PHONE:$('phone').value, HMRC_MFA_PHONE_IS_UK:'No',
+    HMRC_MFA_PHONE_COUNTRY:'China', HMRC_IS_TAX_AGENT:'No', HMRC_ACCESS_AS_BUSINESS:'Yes'
+  };
+  try {
+    const response = await post('/api/start', {fresh_session:$('fresh').checked, resume:false, credentials, extracted_values:extractedValues, extracted_confirmed:extractionConfirmed});
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '启动失败');
+    $('password').value = '';
+  } catch (error) { setMessage('form-error', error.message, 'error'); }
+});
+
+$('send-code').addEventListener('click', async () => {
+  setMessage('code-error', '');
+  const response = await post('/api/code', {code:$('code').value});
+  const body = await response.json();
+  if (!response.ok) setMessage('code-error', body.detail || '提交失败', 'error'); else $('code').value = '';
+});
+
+$('pause').addEventListener('click', async () => {
+  setMessage('pause-error', '');
+  const response = await post('/api/pause');
+  const body = await response.json();
+  if (!response.ok) setMessage('pause-error', body.detail || '暂停失败', 'error');
+});
+
+$('continue').addEventListener('click', async () => {
+  setMessage('pause-error', ''); syncExtractedValues();
+  if (!extractionConfirmed) {
+    setMessage('pause-error', '修改资料后请先点击“确认资料无误”。', 'error');
+    return;
+  }
+  const response = await post('/api/continue', {extracted_values:extractedValues, extracted_confirmed:extractionConfirmed});
+  const body = await response.json();
+  if (!response.ok) setMessage('pause-error', body.detail || '继续失败', 'error');
+});
+
+$('review-confirm').addEventListener('click', async () => {
+  setMessage('review-message', '');
+  if (!$('review-submit-consent').checked) {
+    setMessage('review-message', '请先勾选提交确认。', 'error');
+    return;
+  }
+  $('review-confirm').disabled = true;
+  const response = await post('/api/final-review/confirm', {confirmed:true});
+  const body = await response.json();
+  if (!response.ok) {
+    setMessage('review-message', body.detail || '提交确认失败', 'error');
+    $('review-confirm').disabled = false;
+  } else {
+    setMessage('review-message', '确认已发送，程序正在点击 HMRC 的 Confirm and submit。', 'ok');
+  }
+});
+
+$('review-submit-consent').addEventListener('change', () => {
+  $('review-confirm').disabled = !$('review-submit-consent').checked;
+});
+
+let isAdmin = false;
+let usersLoaded = false;
+
+async function loadUsers() {
+  try {
+    const response = await fetch('/api/users');
+    if (!response.ok) return;
+    const body = await response.json();
+    $('user-list').innerHTML = body.users.map(item =>
+      `<li>${esc(item.username)}${item.admin ? ' · <b>管理员</b>' : ''} <a href="#" data-remove-user="${esc(item.username)}" style="float:right;color:var(--red)">删除</a></li>`
+    ).join('');
+    document.querySelectorAll('[data-remove-user]').forEach(link => {
+      link.addEventListener('click', async event => {
+        event.preventDefault();
+        const name = link.dataset.removeUser;
+        if (!confirm(`确认删除账号 ${name}？其会话将立即失效。`)) return;
+        const removal = await post('/api/users/delete', {username: name});
+        const result = await removal.json();
+        if (!removal.ok) setMessage('admin-message', result.detail || '删除失败', 'error');
+        else { setMessage('admin-message', `已删除 ${name}`, 'ok'); loadUsers(); }
+      });
+    });
+  } catch (_) {}
+}
+
+$('add-user').addEventListener('click', async () => {
+  setMessage('admin-message', '');
+  const response = await post('/api/users', {
+    username: $('new-username').value.trim(),
+    password: $('new-password').value,
+    admin: $('new-admin').checked
+  });
+  const body = await response.json();
+  if (!response.ok) { setMessage('admin-message', body.detail || '操作失败', 'error'); return; }
+  setMessage('admin-message', body.action === 'reset' ? `已重置 ${body.user} 的密码` : `已创建账号 ${body.user}`, 'ok');
+  $('new-username').value = ''; $('new-password').value = ''; $('new-admin').checked = false;
+  loadUsers();
+});
+
+function showAdmin(admin) {
+  isAdmin = !!admin;
+  $('admin-panel').style.display = isAdmin ? 'block' : 'none';
+  if (isAdmin && !usersLoaded) { usersLoaded = true; loadUsers(); }
+}
+
+function showReview(info) {
+  if (!info || !info.available) {
+    $('review').style.display = 'none';
+    $('review-submit-consent').checked = false;
+    $('review-confirm').disabled = true;
+    return;
+  }
+  $('review').style.display = 'block';
+  if (info.pdf) {
+    $('review-download').setAttribute('href', '/api/final-review/pdf');
+    $('review-download').textContent = '下载完整 PDF 存档';
+  } else if (info.png) {
+    $('review-download').setAttribute('href', '/api/final-review/png');
+    $('review-download').textContent = 'PDF 生成失败，下载完整截图存档';
+  }
+}
+
+async function refresh() {
+  try {
+    const response = await fetch('/api/status');
+    if (response.status === 401) { window.location.href = '/login'; return; }
+    const state = await response.json();
+    $('who').textContent = state.user ? '当前账号：' + state.user : '';
+    if ($('config').value !== (state.config || '')) $('config').value = state.config || '';
+    $('status').className = 'status ' + state.status; $('status').textContent = state.message;
+    $('heading').textContent = state.heading ? '页面：' + state.heading : '';
+    $('url').textContent = state.url ? 'URL：' + state.url : '';
+    $('otp').style.display = state.status === 'waiting_code' ? 'block' : 'none';
+    $('busy').style.display = state.busy_with ? 'block' : 'none';
+    if (state.busy_with) $('busy').textContent = `当前有 ${state.busy_with} 的任务在运行，一次只能跑一个客户，请等待其结束。`;
+    $('start').disabled = ['starting','running','waiting_code','pausing','paused','reviewing'].includes(state.status) || !!state.busy_with;
+    $('pause').disabled = state.status !== 'running';
+    $('continue').disabled = state.status !== 'paused';
+    identityCount = state.identity_documents || identityCount;
+    showAdmin(state.admin);
+    showReview(state.final_review);
+    $('events').innerHTML = [...state.events].reverse().map(item => `<li><b>${esc(item.event)}</b>${item.heading ? ' · '+esc(item.heading) : ''}${item.text ? ' · '+esc(item.text) : ''}</li>`).join('');
+  } catch (_) {}
+}
+setInterval(refresh,1000); refresh();
+</script>
+</body>
+</html>
+>>>>>>> Stashed changes
