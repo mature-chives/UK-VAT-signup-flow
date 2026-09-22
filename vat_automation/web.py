@@ -4,16 +4,20 @@ import argparse
 import asyncio
 import atexit
 import hmac
+import json
 import math
 import queue
 import secrets
 import shutil
+import sys
 import tempfile
 import threading
+import traceback
 import uuid
 import webbrowser
 import zipfile
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -316,6 +320,39 @@ class JobManager:
             if session.state["status"] in ACTIVE_STATES:
                 raise RuntimeError("自动化运行中不能清除登录信息。")
             session.saved_credentials = {}
+
+    def _record_failure(
+        self,
+        session: UserSession,
+        event: str,
+        message: str,
+        exc: BaseException | None = None,
+    ) -> None:
+        """把启动/运行失败写进审计日志和终端，避免只留在网页上看不到。"""
+        record = {
+            "time": datetime.now(UTC).isoformat(),
+            "event": event,
+            "user": session.username,
+            "message": message,
+        }
+        if exc is not None:
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            traceback.print_exception(
+                type(exc), exc, exc.__traceback__, file=sys.stderr
+            )
+        else:
+            print(f"[自动化失败] {session.username}：{message}", file=sys.stderr)
+        try:
+            settings = load_settings(self.config_path)
+            artifacts = settings.artifacts_dir
+        except (OSError, ValueError):
+            return
+        try:
+            artifacts.mkdir(parents=True, exist_ok=True)
+            with (artifacts / "audit.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            return
 
     def pause(self, username: str) -> None:
         session = self.session(username)
@@ -657,8 +694,10 @@ class JobManager:
                 asyncio.run(execute())
         except AutomationStopped as exc:
             self._set_terminal_state(session, "stopped", str(exc))
+            self._record_failure(session, "run-stopped", str(exc))
         except Exception as exc:
             self._set_terminal_state(session, "failed", str(exc))
+            self._record_failure(session, "run-failed", str(exc), exc)
         else:
             self._set_terminal_state(session, "completed", "流程已完成")
 

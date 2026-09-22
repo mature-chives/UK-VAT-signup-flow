@@ -714,6 +714,36 @@ class EndpointTests(WebAuthContext):
 class CredentialMemoryTests(unittest.TestCase):
     """HMRC 登录信息只留在本机进程内存里，失败重试不必重新输入密码。"""
 
+    def test_startup_failure_is_recorded_in_audit_log(self) -> None:
+        import contextlib
+
+        with tempfile.TemporaryDirectory() as workspace:
+            base = Path(workspace)
+            artifacts = base / "artifacts-eori"
+            config = base / "vat-config.eori.flow.json"
+            config.write_text(
+                json.dumps(
+                    {
+                        "identity_documents_required": 0,
+                        "artifacts_dir": str(artifacts),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manager = JobManager(config)
+            session = manager.session("alice")
+            with contextlib.redirect_stderr(io.StringIO()):
+                manager._record_failure(
+                    session, "run-failed", "日期格式错误", ValueError("bad date")
+                )
+            record = json.loads(
+                (artifacts / "audit.jsonl").read_text(encoding="utf-8").strip()
+            )
+            self.assertEqual(record["event"], "run-failed")
+            self.assertEqual(record["user"], "alice")
+            self.assertEqual(record["message"], "日期格式错误")
+            self.assertIn("bad date", record["error"])
+
     def setUp(self) -> None:
         self._workspace = tempfile.TemporaryDirectory()
         self.addCleanup(self._workspace.cleanup)
