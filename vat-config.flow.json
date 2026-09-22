@@ -139,7 +139,7 @@
       },
       "answers": {
         "tax-identifier-radio": "doc:tax-identifier-radio",
-        "tax-identifier": "doc:overseas_tax_identifier"
+        "tax-identifier": "doc:company_registration_number"
       },
       "action": "continue"
     },

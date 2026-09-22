@@ -88,7 +88,7 @@ def flow_page_rules() -> list[dict[str, object]]:
             "/overseas-identifier",
             answers={
                 "tax-identifier-radio": "doc:tax-identifier-radio",
-                "tax-identifier": "doc:overseas_tax_identifier",
+                "tax-identifier": "doc:company_registration_number",
             },
         ),
         _rule(

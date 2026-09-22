@@ -23,16 +23,6 @@ LIVE_APPLICATION_TEST_MARKERS: tuple[tuple[str, str], ...] = (
     ("tester", "检测到 Tester 测试标记"),
 )
 ADDRESS_MAX_LENGTH = 35
-ADDRESS_ABBREVIATIONS: tuple[tuple[str, str], ...] = (
-    (r"\bBuildings?\b", "Bldg"),
-    (r"\bApartments?\b", "Apt"),
-    (r"\bRooms?\b", "Rm"),
-    (r"\bFloors?\b", "Fl"),
-    (r"\bAvenue\b", "Ave"),
-    (r"\bBoulevard\b", "Blvd"),
-    (r"\bRoad\b", "Rd"),
-    (r"\bStreet\b", "St"),
-)
 ANSWER_ALIAS_GROUPS: tuple[tuple[str, ...], ...] = (
     ("Business name", "What is the official name of the business?"),
     (
@@ -147,61 +137,27 @@ def _address_value(value: Any) -> str:
     return _clean_address_text(value)
 
 
-def _fit_address_field(value: str, field: str, *, locality: bool = False) -> str:
-    if len(value) <= ADDRESS_MAX_LENGTH:
-        return value
-
-    shortened = value
-    if locality:
-        shortened = re.sub(
-            r"\b(?:District|City)\b", "", shortened, flags=re.IGNORECASE
-        )
-        shortened = re.sub(r"\s+,", ",", shortened)
-        shortened = re.sub(r"\s+", " ", shortened).strip(" ,")
-        if len(shortened) <= ADDRESS_MAX_LENGTH:
-            return shortened
-
-    for pattern, replacement in ADDRESS_ABBREVIATIONS:
-        shortened = re.sub(pattern, replacement, shortened, flags=re.IGNORECASE)
-    shortened = re.sub(r"\s+", " ", shortened).strip(" ,")
-    if len(shortened) <= ADDRESS_MAX_LENGTH:
-        return shortened
-    raise ValueError(
-        f"{field} 超过 {ADDRESS_MAX_LENGTH} 个字符且无法安全缩写：{value}"
-    )
-
-
 def build_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
-    """将结构化国际地址转换为 HMRC 表单字段，不截断关键地址内容。"""
+    """将结构化地址配置转换为 HMRC 国际地址表的 5 行字段。
+
+    与 doc:home / doc:business 共用同一套拆行逻辑，不缩写、不截断。
+    """
     if not address:
         return {}
-
-    premises = _address_value(address.get("premises", address.get("line1", "")))
-    street = _address_value(address.get("street", address.get("line2", "")))
     locality_parts = [
         _clean_address_text(address.get(key, ""))
         for key in ("locality", "city", "region")
     ]
-    locality = ", ".join(dict.fromkeys(part for part in locality_parts if part))
-
-    answers: dict[str, str] = {}
-    if premises:
-        answers["Address line 1"] = _fit_address_field(
-            premises, "Address line 1"
-        )
-    if street:
-        answers["Address line 2"] = _fit_address_field(street, "Address line 2")
-    if locality:
-        answers["Town or city"] = _fit_address_field(
-            locality, "Town or city", locality=True
-        )
-    postcode = _clean_address_text(address.get("postcode", ""))
-    country = _clean_address_text(address.get("country", ""))
-    if postcode:
-        answers["Postcode"] = postcode
-    if country:
-        answers["Country"] = country
-    return answers
+    normalized: dict[str, Any] = {
+        "premises": address.get("premises", address.get("line1", "")),
+        "street": address.get("street", address.get("line2", "")),
+        "locality": ", ".join(
+            dict.fromkeys(part for part in locality_parts if part)
+        ),
+        "postcode": address.get("postcode", ""),
+        "country": address.get("country", ""),
+    }
+    return build_international_address_answers(normalized)
 
 
 def build_international_address_answers(address: Mapping[str, Any]) -> dict[str, str]:

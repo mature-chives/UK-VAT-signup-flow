@@ -116,7 +116,7 @@ class DocumentParserTests(unittest.TestCase):
         self.assertEqual(values["business_name"], "Local Trading Ltd")
         self.assertEqual(values["full_name"], "Ming Li")
         self.assertEqual(values["company_registration_number"], "ABC123")
-        self.assertEqual(values["overseas_tax_identifier"], "ABC123")
+        self.assertNotIn("overseas_tax_identifier", values)
         self.assertEqual(values["email"], "personal@example.test")
         self.assertEqual(values["phone"], "8613900000000")
         self.assertEqual(values["vat_contact_email"], "vat@example.test")
@@ -175,7 +175,7 @@ class DocumentParserTests(unittest.TestCase):
             {
                 "first_name": "Ming",
                 "birth_date": "1990-02-03",
-                "overseas_tax_identifier": "TAX-123",
+                "company_registration_number": "TAX-123",
                 "email": "  person@example.test  ",
             }
         )
@@ -185,8 +185,9 @@ class DocumentParserTests(unittest.TestCase):
         self.assertEqual(bag["date-of-birth.year"], "1990")
         self.assertEqual(bag["tax-identifier-radio"], "Yes")
         self.assertEqual(bag["tax-identifier"], "TAX-123")
+        self.assertNotIn("overseas_tax_identifier", bag)
 
-    def test_company_registration_number_is_used_as_overseas_tax_id(self) -> None:
+    def test_company_registration_number_fills_hmrc_tax_identifier(self) -> None:
         values = extract_document(
             "vat-info.txt",
             (
@@ -199,11 +200,11 @@ class DocumentParserTests(unittest.TestCase):
             ).encode(),
         )["values"]
         self.assertEqual(values["company_registration_number"], "91330100MA2XXXXX1A")
-        self.assertEqual(values["overseas_tax_identifier"], "91330100MA2XXXXX1A")
+        self.assertNotIn("overseas_tax_identifier", values)
         bag = prepare_document_values(values)
         self.assertEqual(bag["tax-identifier-radio"], "Yes")
         self.assertEqual(bag["tax-identifier"], "91330100MA2XXXXX1A")
-        self.assertEqual(bag["overseas_tax_identifier"], "91330100MA2XXXXX1A")
+        self.assertNotIn("overseas_tax_identifier", bag)
 
     def test_birth_date_is_converted_to_hmrc_components(self) -> None:
         self.assertEqual(

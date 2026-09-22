@@ -40,6 +40,22 @@
     .fields .wide { grid-column:1/-1; }
     details { margin-top:20px; border:1px solid var(--line); padding:12px 14px; }
     summary { cursor:pointer; font-weight:700; }
+    .group-section { margin-top:14px; border:1px solid var(--line); }
+    .group-section > summary { padding:11px 14px; background:#f0f2f4; font-weight:700; }
+    .group-badge { margin-left:10px; font-size:13px; font-weight:600; }
+    .group-badge.ok { color:var(--green); }
+    .group-badge.miss { color:var(--red); }
+    .group-body { padding:12px 14px; }
+    .group-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+    .group-grid .wide { grid-column:1/-1; }
+    .field-missing { border-color:var(--red) !important; }
+    .addr-preview { border:1px dashed #7a858e; background:#fafafa; padding:12px 14px; margin-top:10px; }
+    .addr-preview .addr-title { font-weight:700; font-size:14px; color:var(--muted); }
+    .addr-lines { white-space:pre-line; overflow-wrap:anywhere; margin:8px 0 10px; }
+    .addr-preview button { margin:0; padding:6px 12px; font-size:14px; box-shadow:none; }
+    .fixed-row { display:grid; grid-template-columns:minmax(130px,.85fr) minmax(0,1.7fr); gap:12px; padding:8px 0; border-top:1px solid var(--line); }
+    .fixed-row .review-key { font-weight:650; overflow-wrap:anywhere; }
+    .fixed-row .review-value { overflow-wrap:anywhere; white-space:pre-line; }
     .status { border-left:6px solid var(--blue); padding:13px 15px; background:#eaf4fb; margin-bottom:18px; }
     .status.waiting_code { border-color:#f47738; background:#fff3e8; }
     .status.pausing,.status.paused { border-color:#ffdd00; background:#fff7bf; }
@@ -50,9 +66,16 @@
     #busy { display:none; padding:12px 14px; margin-bottom:16px; font-size:14px; background:#fff7bf; border-left:5px solid #ffdd00; }
     #review { display:none; margin-top:24px; }
     .review-download { display:inline-block; margin:4px 0 10px; font-weight:700; }
+    .review-section { margin-top:14px; border:1px solid var(--line); }
+    .review-section > summary { padding:11px 14px; background:#f0f2f4; font-weight:700; }
+    .review-row { display:grid; grid-template-columns:minmax(130px,.85fr) minmax(0,1.7fr) auto; gap:12px; padding:10px 14px; border-top:1px solid var(--line); align-items:start; }
+    .review-row .review-key { font-weight:650; overflow-wrap:anywhere; }
+    .review-row .review-value { overflow-wrap:anywhere; white-space:pre-line; }
+    .review-row button { margin:0; padding:6px 12px; font-size:14px; box-shadow:none; }
+    .review-subject { margin:16px 0 4px; font-weight:700; }
     .events { max-height:360px; overflow:auto; padding:0; list-style:none; border-top:1px solid var(--line); }
     .events li { padding:9px 0; border-bottom:1px solid var(--line); font-size:13px; }
-    @media (max-width:800px) { main { grid-template-columns:1fr; } .row,.fields { grid-template-columns:1fr; } .fields .wide { grid-column:auto; } }
+    @media (max-width:800px) { main { grid-template-columns:1fr; } .row,.fields { grid-template-columns:1fr; } .fields .wide { grid-column:auto; } .review-row { grid-template-columns:1fr; gap:6px; } .group-grid { grid-template-columns:1fr; } .group-grid .wide { grid-column:auto; } }
   </style>
 </head>
 <body>
@@ -70,22 +93,21 @@
       <button id="parse-document" class="secondary" type="button">解析文档</button>
       <div id="parse-message" class="message"></div>
       <ul id="parse-warnings" class="warnings"></ul>
-      <div id="extracted-fields" class="fields"></div>
+      <div id="extracted-groups"></div>
       <button id="confirm-extraction" type="button" disabled>确认资料无误</button>
       <div id="confirm-message" class="message"></div>
-      <div class="notice" style="margin-top:18px">固定自动化规则：标准税率营业额 £10,000；降低税率营业额 £0；零税率营业额 £0；SIC 行业代码 47910。这些值不从文档解析，也不在页面中修改。</div>
     </div>
 
     <form id="start-form">
       <div class="section">
-        <h2>2. 验证信息</h2>
+        <h2>2. HMRC 登录（收验证码）</h2>
         <div class="row">
-          <div><label for="email">接收邮箱验证码的邮箱</label><input id="email" type="email" autocomplete="email" required></div>
-          <div><label for="phone">接收短信验证码的手机号</label><input id="phone" type="tel" autocomplete="tel" required></div>
+          <div><label for="email">登录邮箱（收验证码）</label><input id="email" type="email" autocomplete="email" required></div>
+          <div><label for="phone">登录手机号（收短信验证码）</label><input id="phone" type="tel" autocomplete="tel" required></div>
         </div>
-        <label for="password">开户密码</label>
+        <label for="password">HMRC 登录密码</label>
         <input id="password" type="password" autocomplete="new-password" required>
-        <div class="hint">手机号国家默认 China，“是否英国手机号”默认 No。</div>
+        <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进 VAT 申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
       </div>
 
       <div class="section">
@@ -111,14 +133,9 @@
 
     <div id="review" class="section">
       <h2>最终核对</h2>
-      <div class="notice">请逐项核对下方存档。确认操作不可撤销：确认后程序会点击 HMRC 的“Confirm and submit”，正式提交 VAT 注册申请。</div>
-      <a id="review-download" class="review-download" href="/api/final-review/pdf" download>下载完整 PDF 存档</a>
-      <div id="review-change-controls">
-        <label for="review-change-target">选择需要修改的信息</label>
-        <select id="review-change-target"></select>
-        <button id="review-edit" class="secondary" type="button">远程修改所选信息</button>
-        <div class="hint">系统会打开对应的 HMRC Change 页面，并把字段和当前值同步到这里，无需访问服务器上的 Chrome。</div>
-      </div>
+      <div class="notice">请逐项核对下方与 HMRC 核对页一致的内容。确认操作不可撤销：确认后程序会点击 HMRC 的“Confirm and submit”，正式提交 VAT 注册申请。</div>
+      <a id="review-download" class="review-download" href="/api/final-review/pdf" download>存档：下载完整 PDF</a>
+      <div id="review-changes"></div>
       <div id="remote-edit" style="display:none">
         <h3 id="remote-edit-heading">远程修改 HMRC 信息</h3>
         <ul id="remote-edit-errors" class="warnings"></ul>
@@ -128,6 +145,7 @@
         <button id="remote-edit-submit" type="button">保存修改并继续</button>
         <div id="remote-edit-message" class="message"></div>
       </div>
+      <div id="review-subject" class="review-subject" hidden></div>
       <label><input id="review-submit-consent" type="checkbox" style="width:auto"> 我确认资料真实、完整且无误，并同意正式提交到 HMRC</label>
       <button id="review-confirm" class="danger" type="button" disabled>确认并提交到 HMRC</button>
       <div id="review-message" class="message"></div>
@@ -175,6 +193,7 @@ let identityCount = 0;
 let extractionConfirmed = false;
 let currentStatus = 'idle';
 let reviewChangesSignature = '';
+let reviewEditInFlight = false;
 let remoteEditSignature = '';
 let remoteEditInfo = null;
 
@@ -208,20 +227,155 @@ function invalidateConfirmation(message='') {
   if (message) setMessage('confirm-message', message, 'error');
 }
 
-function renderExtractedFields() {
-  const order = Object.keys(extractedLabels);
-  $('extracted-fields').innerHTML = order.map(key => {
-    const label = extractedLabels[key] || key;
-    const value = esc(extractedValues[key] || '');
-    const wide = ['business_description','premises','street'].includes(key) ? ' wide' : '';
-    const control = key === 'business_description'
-      ? `<textarea data-extracted-key="${key}">${value}</textarea>`
-      : `<input data-extracted-key="${key}" value="${value}">`;
-    return `<div class="${wide}"><label>${esc(label)}</label>${control}</div>`;
-  }).join('');
-  document.querySelectorAll('[data-extracted-key]').forEach(input => {
+// 与 HMRC Check your answers 的 section 对齐：准备页按同一套分组预演。
+const FIELD_GROUPS = [
+  {title:'项目信息', fields:['project_code','application_reference'], required:['project_code','application_reference']},
+  {title:'关于你（About you）', fields:['full_name','first_name','last_name','birth_date'], required:['full_name','birth_date']},
+  {title:'居住地址（Home address）', lineKeys:['home_premises','home_street','home_locality','home_city','home_region','home_postcode','home_country'], sourceKeys:['residential_address'], sourceTitle:'原始居住地址（拆分来源）', required:['home_premises','home_street','home_country']},
+  {title:'核实企业（Verify your business）', fields:['business_name','company_registration_number','company_registration_country','company_incorporation_date'], required:['business_name']},
+  {title:'业务与经营地址（About the business）', fields:['business_description'], optionalFields:['trading_name'], optionalTitle:'选填：交易名称（不填则 HMRC 沿用公司正式名称）', lineKeys:['premises','street','locality','city','region','postcode','country'], sourceKeys:['business_address','business_postcode'], sourceTitle:'原始注册地址（拆分来源）', required:['premises','street','postcode','country','business_description']},
+  {title:'联系方式（会进入申请）', fields:['email','phone','vat_contact_email','business_phone'], required:['email','phone']},
+];
+const REQUIRED_KEYS = FIELD_GROUPS.flatMap(group => group.required || []);
+const VAT_RULES_ROWS = [
+  ['Standard rate (20%) VAT taxable turnover for next 12 months','£10,000'],
+  ['Reduced rate (5%) VAT taxable turnover for next 12 months','£0'],
+  ['Zero rate (0%) VAT taxable turnover for next 12 months','£0'],
+  ['Standard Industry Classification codes','47910 - Retail sale via mail order houses or via Internet'],
+  ['VAT Returns','按注册月份自动选择季度申报组'],
+];
+let renderedGroups = [];
+
+function fieldInputHtml(key, wide=false) {
+  const label = extractedLabels[key] || key;
+  const value = esc(extractedValues[key] || '');
+  const control = key === 'business_description'
+    ? `<textarea data-extracted-key="${key}">${value}</textarea>`
+    : `<input data-extracted-key="${key}" value="${value}">`;
+  return `<div class="${wide ? 'wide' : ''}"><label>${esc(label)}</label>${control}</div>`;
+}
+
+function renderGroupSection(group, index) {
+  const parts = [];
+  const optional = group.optionalFields || [];
+  const shownOptional = optional.filter(key => (extractedValues[key] || '').trim());
+  const hiddenOptional = optional.filter(key => !shownOptional.includes(key));
+  const mainFields = [...shownOptional, ...(group.fields || [])];
+  if (mainFields.length) {
+    parts.push(`<div class="group-grid">${mainFields.map(key => fieldInputHtml(key, key === 'business_description')).join('')}</div>`);
+  }
+  if (hiddenOptional.length) {
+    parts.push(`
+      <details class="sub-details">
+        <summary>${esc(group.optionalTitle || '选填字段（默认留空）')}</summary>
+        <div class="group-grid">${hiddenOptional.map(key => fieldInputHtml(key)).join('')}</div>
+      </details>`);
+  }
+  if (group.lineKeys) {
+    const gid = `addr-${index}`;
+    parts.push(`
+      <div class="addr-preview">
+        <div class="addr-title">预览（与 HMRC 核对页一致）</div>
+        <div class="addr-lines" data-addr-lines="${gid}"></div>
+        <button type="button" class="secondary" data-addr-toggle="${gid}">改地址</button>
+      </div>
+      <div data-addr-edit="${gid}" hidden>
+        <div class="group-grid">${group.lineKeys.map(key => fieldInputHtml(key)).join('')}</div>
+      </div>`);
+  }
+  if (group.sourceKeys && group.sourceKeys.length) {
+    parts.push(`
+      <details class="sub-details">
+        <summary>${esc(group.sourceTitle || '原始地址（拆分来源）')}</summary>
+        <div class="group-grid">${group.sourceKeys.map(key => fieldInputHtml(key, true)).join('')}</div>
+      </details>`);
+  }
+  return `
+    <details class="group-section" open data-group-index="${index}">
+      <summary>${esc(group.title)}<span class="group-badge" data-group-badge></span></summary>
+      <div class="group-body">${parts.join('')}</div>
+    </details>`;
+}
+
+function renderVatRulesSection() {
+  return `
+    <details class="group-section" open>
+      <summary>VAT 细则（固定规则，随申请提交）<span class="group-badge ok">固定</span></summary>
+      <div class="group-body">
+        ${VAT_RULES_ROWS.map(([key, value]) => `<div class="fixed-row"><div class="review-key">${esc(key)}</div><div class="review-value">${esc(value)}</div></div>`).join('')}
+        <div class="hint">固定自动化规则：不从文档解析，也不能在页面中修改。</div>
+      </div>
+    </details>`;
+}
+
+function renderExtractedGroups() {
+  const known = new Set(FIELD_GROUPS.flatMap(group => [...(group.fields||[]), ...(group.optionalFields||[]), ...(group.lineKeys||[]), ...(group.sourceKeys||[])]));
+  const extras = Object.keys(extractedLabels).filter(key => !known.has(key));
+  renderedGroups = extras.length ? [...FIELD_GROUPS, {title:'其他字段', fields:extras, required:[]}] : [...FIELD_GROUPS];
+  const wrap = $('extracted-groups');
+  wrap.innerHTML = renderedGroups.map(renderGroupSection).join('') + renderVatRulesSection();
+  wrap.querySelectorAll('[data-extracted-key]').forEach(input => {
     input.addEventListener('input', () => invalidateConfirmation('资料已修改，请重新确认。'));
   });
+  wrap.querySelectorAll('[data-addr-toggle]').forEach(button => {
+    button.addEventListener('click', () => {
+      const edit = wrap.querySelector(`[data-addr-edit="${button.dataset.addrToggle}"]`);
+      edit.hidden = !edit.hidden;
+      button.textContent = edit.hidden ? '改地址' : '收起地址编辑';
+      updateGroupBadges();
+    });
+  });
+  refreshAddrPreviews();
+  updateGroupBadges();
+}
+
+function currentFieldValue(key) {
+  const input = document.querySelector(`[data-extracted-key="${key}"]`);
+  return input ? input.value.trim() : '';
+}
+
+function refreshAddrPreviews() {
+  document.querySelectorAll('[data-addr-lines]').forEach(el => {
+    const group = renderedGroups.find((_, index) => `addr-${index}` === el.dataset.addrLines);
+    if (!group) return;
+    const lines = group.lineKeys.map(key => currentFieldValue(key)).filter(Boolean);
+    el.textContent = lines.length ? lines.join('\n') : '尚未填写，点「改地址」补充。';
+  });
+}
+
+function updateGroupBadges() {
+  document.querySelectorAll('[data-group-index]').forEach(section => {
+    const group = renderedGroups[Number(section.dataset.groupIndex)];
+    if (!group) return;
+    const badge = section.querySelector('[data-group-badge]');
+    const required = group.required || [];
+    const missing = required.filter(key => !currentFieldValue(key));
+    if (!required.length) {
+      badge.textContent = ''; badge.className = 'group-badge';
+    } else if (!missing.length) {
+      badge.textContent = '✓'; badge.className = 'group-badge ok';
+    } else {
+      badge.textContent = `缺 ${missing.length} 项`; badge.className = 'group-badge miss';
+    }
+    required.forEach(key => {
+      const input = document.querySelector(`[data-extracted-key="${key}"]`);
+      if (input) input.classList.toggle('field-missing', !currentFieldValue(key));
+    });
+  });
+}
+
+function revealField(input) {
+  let node = input;
+  while (node) {
+    if (node.tagName === 'DETAILS') node.open = true;
+    node = node.parentElement;
+  }
+  const edit = input.closest('[data-addr-edit]');
+  if (edit && edit.hidden) {
+    edit.hidden = false;
+    const toggle = document.querySelector(`[data-addr-toggle="${edit.dataset.addrEdit}"]`);
+    if (toggle) toggle.textContent = '收起地址编辑';
+  }
 }
 
 $('logout').addEventListener('click', async () => {
@@ -240,7 +394,7 @@ $('parse-document').addEventListener('click', async () => {
     if (!response.ok) throw new Error(body.detail || '解析失败');
     extractedValues = body.values || {}; extractedLabels = body.labels || {};
     invalidateConfirmation();
-    renderExtractedFields();
+    renderExtractedGroups();
     $('confirm-extraction').disabled = false;
     $('parse-warnings').innerHTML = (body.warnings || []).map(item => `<li>${esc(item)}</li>`).join('');
     setMessage('parse-message', `解析完成，识别到 ${Object.keys(extractedValues).length} 个字段。请检查并修正下方内容。`, 'ok');
@@ -249,17 +403,22 @@ $('parse-document').addEventListener('click', async () => {
 
 $('confirm-extraction').addEventListener('click', () => {
   syncExtractedValues();
-  const required = ['project_code','application_reference','business_name','full_name','birth_date','email','phone','business_description','home_premises','home_street','home_city','home_country','premises','street','city','postcode','country'];
-  const missing = required.filter(key => !extractedValues[key]);
+  const missing = REQUIRED_KEYS.filter(key => !extractedValues[key]);
   if (missing.length) {
     const names = missing.map(key => extractedLabels[key] || key);
     invalidateConfirmation('以下必要资料仍为空：' + names.join('、'));
     const first = document.querySelector(`[data-extracted-key="${missing[0]}"]`);
-    if (first) first.focus();
+    if (first) { revealField(first); first.focus(); }
     return;
   }
   extractionConfirmed = true;
   setMessage('confirm-message', '已确认当前提取资料无误。如再次修改任何字段，需要重新确认。', 'ok');
+});
+
+$('extracted-groups').addEventListener('input', event => {
+  if (!event.target.dataset.extractedKey) return;
+  refreshAddrPreviews();
+  updateGroupBadges();
 });
 
 $('save-identity').addEventListener('click', async () => {
@@ -335,23 +494,6 @@ $('review-confirm').addEventListener('click', async () => {
     $('review-confirm').disabled = false;
   } else {
     setMessage('review-message', '确认已发送，程序正在点击 HMRC 的 Confirm and submit。', 'ok');
-  }
-});
-
-$('review-edit').addEventListener('click', async () => {
-  setMessage('review-message', '');
-  const target = $('review-change-target').value;
-  if (!target) { setMessage('review-message', '当前没有可修改的 HMRC 项目。', 'error'); return; }
-  $('review-edit').disabled = true;
-  $('review-confirm').disabled = true;
-  const response = await post('/api/final-review/edit', {target});
-  const body = await response.json();
-  if (!response.ok) {
-    setMessage('review-message', body.detail || '进入修改模式失败', 'error');
-    $('review-edit').disabled = false;
-  } else {
-    $('review-submit-consent').checked = false;
-    setMessage('review-message', '正在读取所选 HMRC 修改页面，请稍候。', 'ok');
   }
 });
 
@@ -478,34 +620,85 @@ function showAdmin(admin) {
   if (isAdmin && !usersLoaded) { usersLoaded = true; loadUsers(); }
 }
 
+function renderReviewChanges(changes) {
+  reviewEditInFlight = false;
+  const wrap = $('review-changes');
+  if (!changes.length) {
+    wrap.innerHTML = '<p class="hint">当前 HMRC 核对页没有可修改的项目，请对照上方存档逐项核对。</p>';
+    return;
+  }
+  const groups = new Map();
+  for (const item of changes) {
+    const section = (item.section || '').trim() || '申请内容';
+    if (!groups.has(section)) groups.set(section, []);
+    groups.get(section).push(item);
+  }
+  wrap.innerHTML = [...groups.entries()].map(([section, items]) => `
+    <details class="review-section" open>
+      <summary>${esc(section)}</summary>
+      ${items.map(item => `
+        <div class="review-row">
+          <div class="review-key">${esc(item.field || item.label)}</div>
+          <div class="review-value">${esc(item.value || '—')}</div>
+          <button type="button" class="secondary review-change-btn" data-change-target="${esc(item.id)}">修改</button>
+        </div>`).join('')}
+    </details>`).join('');
+  wrap.querySelectorAll('.review-change-btn').forEach(button => {
+    button.addEventListener('click', () => requestReviewEdit(button.dataset.changeTarget));
+  });
+  updateReviewButtons();
+}
+
+function updateReviewButtons() {
+  document.querySelectorAll('.review-change-btn').forEach(button => {
+    button.disabled = currentStatus !== 'reviewing' || reviewEditInFlight;
+  });
+}
+
+async function requestReviewEdit(target) {
+  setMessage('review-message', '');
+  reviewEditInFlight = true;
+  updateReviewButtons();
+  const response = await post('/api/final-review/edit', {target});
+  const body = await response.json();
+  if (!response.ok) {
+    setMessage('review-message', body.detail || '进入修改模式失败', 'error');
+    reviewEditInFlight = false;
+    updateReviewButtons();
+  } else {
+    $('review-submit-consent').checked = false;
+    setMessage('review-message', '正在读取所选 HMRC 修改页面，字段和当前值会同步到下方。', 'ok');
+  }
+}
+
 function showReview(info) {
   if (!info || !info.available) {
     $('review').style.display = 'none';
     $('review-submit-consent').checked = false;
     $('review-confirm').disabled = true;
-    $('review-edit').disabled = true;
-    $('review-change-controls').style.display = 'none';
     renderRemoteEdit(null);
     return;
   }
   $('review').style.display = 'block';
-  $('review-change-controls').style.display = info.editable ? 'block' : 'none';
+  const subject = (extractedValues.business_name || '').trim();
+  $('review-subject').hidden = !subject;
+  if (subject) {
+    $('review-subject').textContent = `将把 ${subject} 的 VAT 注册申请正式提交到 HMRC，操作不可撤销。`;
+  }
+  if (info.pdf) {
+    $('review-download').setAttribute('href', '/api/final-review/pdf');
+    $('review-download').textContent = '存档：下载完整 PDF';
+  } else if (info.png) {
+    $('review-download').setAttribute('href', '/api/final-review/png');
+    $('review-download').textContent = '存档：下载完整截图（PDF 生成失败）';
+  }
   const changes = info.changes || [];
   const changesSignature = JSON.stringify(changes);
   if (changesSignature !== reviewChangesSignature) {
-    const selected = $('review-change-target').value;
-    $('review-change-target').innerHTML = changes.map(item => `<option value="${esc(item.id)}">${esc(item.label)}</option>`).join('');
-    if (changes.some(item => item.id === selected)) $('review-change-target').value = selected;
     reviewChangesSignature = changesSignature;
+    renderReviewChanges(changes);
   }
   renderRemoteEdit(info.edit);
-  if (info.pdf) {
-    $('review-download').setAttribute('href', '/api/final-review/pdf');
-    $('review-download').textContent = '下载完整 PDF 存档';
-  } else if (info.png) {
-    $('review-download').setAttribute('href', '/api/final-review/png');
-    $('review-download').textContent = 'PDF 生成失败，下载完整截图存档';
-  }
 }
 
 async function refresh() {
@@ -528,7 +721,7 @@ async function refresh() {
     identityCount = state.identity_documents || identityCount;
     showAdmin(state.admin);
     showReview(state.final_review);
-    $('review-edit').disabled = currentStatus !== 'reviewing';
+    updateReviewButtons();
     $('review-confirm').disabled = currentStatus !== 'reviewing' || !$('review-submit-consent').checked;
     $('events').innerHTML = [...state.events].reverse().map(item => `<li><b>${esc(item.event)}</b>${item.heading ? ' · '+esc(item.heading) : ''}${item.text ? ' · '+esc(item.text) : ''}</li>`).join('');
   } catch (_) {}

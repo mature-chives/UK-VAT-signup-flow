@@ -180,15 +180,18 @@ class ConfigTests(unittest.TestCase):
             {
                 "Address line 1": "Room 601,602,603, Building 3",
                 "Address line 2": "No. 528 Xingqi Road, Donghu Street",
-                "Town or city": "Linping, Hangzhou, Zhejiang",
+                "Address line 3 (optional)": "Linping District, Hangzhou City",
+                "Address line 4 (optional)": "Zhejiang",
                 "Postcode": "311100",
+                "Postcode (optional)": "311100",
                 "Country": "China",
             },
         )
         self.assertTrue(
             all(
-                len(answers[key]) <= 35
-                for key in ("Address line 1", "Address line 2", "Town or city")
+                len(value) <= 35
+                for key, value in answers.items()
+                if key.startswith("Address line")
             )
         )
 
@@ -362,7 +365,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual((found, value), (True, "201, Building 3"))
 
     def test_structured_address_rejects_unsafe_overflow(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Address line 1 超过 35"):
+        with self.assertRaisesRegex(ValueError, "premises 含有超过 35"):
             build_address_answers({"premises": "X" * 36})
 
     def test_international_address_maps_each_english_component_to_own_line(self) -> None:
@@ -570,6 +573,45 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertNotIn("Submit application", SAFE_ACTIONS)
         self.assertIn("Continue to register for VAT", SAFE_ACTIONS)
+
+    def test_final_review_change_items_carry_section_field_and_value(self) -> None:
+        import asyncio
+
+        class _Locator:
+            async def evaluate_all(self, _script: str) -> list[dict[str, object]]:
+                return [
+                    {
+                        "id": "change-0",
+                        "label": "About you — Full Name",
+                        "section": "About you",
+                        "field": "Full Name",
+                        "value": "San Zhang",
+                    },
+                    {
+                        "id": "change-1",
+                        "label": "About you — Home address",
+                        "section": "About you",
+                        "field": "Home address",
+                        "value": "Room 509, 5th Floor, Building 4\n310000\nChina",
+                    },
+                    {"id": "change-2", "label": "Legacy item"},
+                ]
+
+        page = type(
+            "Page",
+            (),
+            {"locator": staticmethod(lambda _selector: _Locator())},
+        )()
+        runner = VatAutomation.__new__(VatAutomation)
+        items = asyncio.run(runner._final_review_change_items(page))
+        self.assertEqual(len(items), 3)
+        self.assertEqual(items[0]["section"], "About you")
+        self.assertEqual(items[0]["field"], "Full Name")
+        self.assertEqual(items[0]["value"], "San Zhang")
+        self.assertIn("\n", items[1]["value"])
+        self.assertEqual(items[2]["section"], "")
+        self.assertEqual(items[2]["field"], "")
+        self.assertEqual(items[2]["value"], "")
 
     def test_final_review_submits_only_after_provider_confirmation(self) -> None:
         import asyncio

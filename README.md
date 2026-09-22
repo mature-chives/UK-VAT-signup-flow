@@ -2,6 +2,8 @@
 
 这是一个基于 Python + Playwright 的英国 VAT 注册流程驱动器。当前目录中的 178 张截图用于确认流程入口、GOV.UK 页面结构以及主要交互类型；程序运行时按页面真实标签匹配配置，不依赖易变化的 CSS class。
 
+后续开发请先阅读 [Kimi 交接与改进计划](docs/kimi-handoff.md)，其中记录当前问题、实施顺序和验收要求。
+
 ## 安全边界
 
 - Government Gateway 用户名和密码从环境变量读取并自动填写；仅验证码暂停等待用户输入。
@@ -55,7 +57,7 @@ cp vat-config.example.json vat-config.json
 }
 ```
 
-多个国际地址页面使用同一地址时，推荐在顶层配置结构化 `address`。程序会按顺序生成地址行，并确保地址行和城市字段不超过 35 个字符：
+多个国际地址页面使用同一地址时，推荐在顶层配置结构化 `address`。程序会把地址分配到 HMRC 国际地址表的 5 个地址栏（Address line 1–5），并确保每行不超过 35 个字符：
 
 ```json
 {
@@ -71,7 +73,7 @@ cp vat-config.example.json vat-config.json
 }
 ```
 
-生成结果为 `Room 601,602,603, Building 3`、`No. 528 Xingqi Road, Donghu Street`、`Linping, Hangzhou, Zhejiang`。某个页面需要不同地址时，可在对应的 `pages[]` 中使用同样的 `address` 对象覆盖。无法在 35 个字符内安全缩写时，程序会在打开浏览器前报错，不会截断地址。
+生成结果依次填入 Address line 1–4：`Room 601,602,603, Building 3`、`No. 528 Xingqi Road, Donghu Street`、`Linping District, Hangzhou City`、`Zhejiang`。某个页面需要不同地址时，可在对应的 `pages[]` 中使用同样的 `address` 对象覆盖。地址无法在不截断的情况下放入 5 行时，程序会在打开浏览器前报错。
 
 同一标签在不同页面含义不同时，应放入 `pages[].answers`，页面配置会覆盖全局配置。`action` 支持：
 

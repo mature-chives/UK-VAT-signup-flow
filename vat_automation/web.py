@@ -474,7 +474,13 @@ class JobManager:
     ) -> dict[str, str]:
         with self._lock:
             changes = [
-                {"id": str(item.get("id", "")), "label": str(item.get("label", ""))}
+                {
+                    "id": str(item.get("id", "")),
+                    "label": str(item.get("label", "")),
+                    "section": str(item.get("section", "")),
+                    "field": str(item.get("field", "")),
+                    "value": str(item.get("value", "")),
+                }
                 for item in info.get("changes", [])
                 if item.get("id") and item.get("label")
             ]

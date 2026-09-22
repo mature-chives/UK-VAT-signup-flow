@@ -851,7 +851,7 @@ class VatAutomation:
         await self._verify_final_submission(page, heading, action)
 
     async def _final_review_change_items(self, page: Any) -> list[dict[str, str]]:
-        """提取最终核对页可远程操作的 Change 链接，不向客户端暴露 URL。"""
+        """提取最终核对页的 section/字段/当前值/Change 链接，不向客户端暴露 URL。"""
         raw = await page.locator("main a").evaluate_all(
             r"""
             links => {
@@ -862,12 +862,21 @@ class VatAutomation:
                 if (!visible || !/^change\b/i.test(text)) return null;
                 const row = link.closest('.govuk-summary-list__row, tr, li');
                 const key = row?.querySelector('.govuk-summary-list__key, th, dt');
+                const valueEl = row?.querySelector(
+                  '.govuk-summary-list__value, td, dd'
+                );
                 const section = row?.closest('.govuk-accordion__section');
                 const heading = section?.querySelector(
                   '.govuk-accordion__section-button, .govuk-accordion__section-heading'
                 );
                 const fieldLabel = (key?.innerText || text.replace(/^change\s*/i, ''))
                   .replace(/\s+/g, ' ').trim();
+                // 地址等答案按行保留换行，交给前端逐行展示。
+                const value = (valueEl?.innerText || '')
+                  .split('\n')
+                  .map(part => part.replace(/\s+/g, ' ').trim())
+                  .filter(Boolean)
+                  .join('\n');
                 let sectionLabel = (heading?.innerText || '').replace(/\s+/g, ' ').trim();
                 sectionLabel = sectionLabel
                   .replace(/\b(show|hide)(\s+this section)?\b/ig, '')
@@ -878,13 +887,25 @@ class VatAutomation:
                   .trim();
                 const label = sectionLabel && !fieldLabel.startsWith(sectionLabel)
                   ? `${sectionLabel} — ${fieldLabel}` : fieldLabel;
-                return {id: `change-${changeIndex++}`, label: label || text};
+                return {
+                  id: `change-${changeIndex++}`,
+                  label: label || text,
+                  section: sectionLabel,
+                  field: fieldLabel,
+                  value: value,
+                };
               }).filter(Boolean);
             }
             """
         )
         return [
-            {"id": str(item.get("id", "")), "label": str(item.get("label", ""))}
+            {
+                "id": str(item.get("id", "")),
+                "label": str(item.get("label", "")),
+                "section": str(item.get("section", "")),
+                "field": str(item.get("field", "")),
+                "value": str(item.get("value", "")),
+            }
             for item in raw
             if item.get("id") and item.get("label")
         ]

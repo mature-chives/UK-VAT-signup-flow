@@ -42,25 +42,21 @@ FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("estimated taxable turnover", "taxable turnover", "预计应税营业额", "预计营业额", "预估之后连续12个月的总营业额（英镑，大约预估）"),
     ),
     "birth_date": ("出生日期", ("date of birth", "birth date", "出生日期")),
-    "overseas_tax_identifier": (
-        "海外税务识别号",
-        ("overseas tax identifier", "tax identifier", "tax id", "海外税号", "税务识别号", "中国纳税人识别号，如有"),
-    ),
     "premises": (
-        "房间/楼宇",
+        "公司地址第1行（英文）",
         ("premises", "address line 1", "room and building", "房间楼宇", "地址第一行"),
     ),
-    "street": ("街道地址", ("street", "address line 2", "street address", "街道地址", "地址第二行")),
-    "locality": ("区/街道", ("locality", "district", "区", "街道")),
-    "city": ("城市", ("city", "town or city", "城市")),
-    "region": ("省/地区", ("region", "province", "state", "省", "地区")),
-    "postcode": ("邮编", ("postcode", "postal code", "zip code", "邮编")),
-    "country": ("国家", ("country", "国家")),
+    "street": ("公司地址第2行（英文）", ("street", "address line 2", "street address", "街道地址", "地址第二行")),
+    "locality": ("公司地址第3行（英文，选填）", ("locality", "district", "区", "街道")),
+    "city": ("公司地址第4行（英文，选填）", ("city", "town or city", "城市")),
+    "region": ("公司地址第5行（英文，选填）", ("region", "province", "state", "省", "地区")),
+    "postcode": ("公司地址邮编", ("postcode", "postal code", "zip code", "邮编")),
+    "country": ("公司地址国家（英文）", ("country", "国家")),
     "home_premises": ("居住地址第1行（英文）", ()),
     "home_street": ("居住地址第2行（英文）", ()),
-    "home_locality": ("居住地址区/街道（英文）", ()),
-    "home_city": ("居住地址城市（英文）", ()),
-    "home_region": ("居住地址省/地区（英文）", ()),
+    "home_locality": ("居住地址第3行（英文，选填）", ()),
+    "home_city": ("居住地址第4行（英文，选填）", ()),
+    "home_region": ("居住地址第5行（英文，选填）", ()),
     "home_postcode": ("居住地址邮编", ()),
     "home_country": ("居住地址国家（英文）", ()),
     "previous_name": ("曾用名", ("曾用名（如有）", "previous name")),
@@ -73,7 +69,14 @@ FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "residential_since": ("现地址起始居住时间", ("什么时候开始在以上地址居住的",)),
     "previous_residential_address": ("过去3年其他地址", ("如果以上地址居住不满3年，请填写3年间的地址和居住时间",)),
     "former_adviser": ("上一任会计师/税务师", ("上一任会计师/税务师的姓名和联系方式（请提供姓名/电话/Email）",)),
-    "company_registration_number": ("公司注册号/统一社会信用代码", ("公司注册号（统一社会信用代码）",)),
+    "company_registration_number": (
+        "公司注册号/统一社会信用代码",
+        (
+            "公司注册号（统一社会信用代码）", "海外税务识别号", "海外税号",
+            "税务识别号", "中国纳税人识别号，如有",
+            "overseas tax identifier", "tax identifier", "tax id",
+        ),
+    ),
     "company_registration_country": ("公司注册国家", ("公司注册国家（请根据实际情况填写）",)),
     "company_incorporation_date": ("公司成立日期", ("公司成立日期",)),
     "business_address": (
@@ -110,15 +113,15 @@ SUPPORTED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".txt", ".json", ".csv", ".tsv"}
 VAT_REGISTRATION_FIELD_KEYS = (
     "project_code", "application_reference",
     "full_name", "first_name", "last_name", "birth_date",
-    "overseas_tax_identifier", "email", "phone", "residential_address",
+    "email", "phone", "residential_address",
     "home_premises", "home_street", "home_locality", "home_city",
     "home_region", "home_postcode", "home_country", "business_name",
     "trading_name", "company_registration_number",
     "company_registration_country", "company_incorporation_date",
-    "business_address", "business_postcode", "vat_contact_email",
-    "business_phone", "business_description",
+    "business_address", "business_postcode",
     "premises", "street", "locality", "city", "region", "postcode",
     "country",
+    "vat_contact_email", "business_phone", "business_description",
 )
 
 
@@ -190,13 +193,9 @@ def prepare_document_values(values: Mapping[str, str]) -> dict[str, str]:
         if str(value).strip()
     }
     bag.update(extracted_birth_date(bag))
-    identifier = (
-        bag.get("overseas_tax_identifier")
-        or bag.get("company_registration_number")
-        or ""
-    )
+    # HMRC 的海外税号就是公司注册号（中国统一社会信用代码）。
+    identifier = bag.get("company_registration_number") or ""
     if identifier:
-        bag["overseas_tax_identifier"] = identifier
         bag["tax-identifier-radio"] = "Yes"
         bag["tax-identifier"] = identifier
     return bag
@@ -395,11 +394,6 @@ def _derive_values(values: dict[str, str]) -> dict[str, str]:
             derived[key] = _normalize_phone(derived[key])
     if derived.get("business_type") and not derived.get("business_description"):
         derived["business_description"] = derived["business_type"]
-    # 当前业务：HMRC 海外税号就是中国统一社会信用代码。
-    if derived.get("company_registration_number") and not derived.get(
-        "overseas_tax_identifier"
-    ):
-        derived["overseas_tax_identifier"] = derived["company_registration_number"]
 
     name_parts = derived.get("full_name", "").split()
     if len(name_parts) >= 2:
