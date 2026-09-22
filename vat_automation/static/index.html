@@ -103,12 +103,14 @@
       <div class="section">
         <h2>2. HMRC 登录（收验证码）</h2>
         <div class="row">
-          <div><label for="email">登录邮箱（收验证码）</label><input id="email" type="email" autocomplete="email" required></div>
-          <div><label for="phone">登录手机号（收短信验证码）</label><input id="phone" type="tel" autocomplete="tel" required></div>
+          <div><label for="email">登录邮箱（收验证码）</label><input id="email" type="email" autocomplete="email"></div>
+          <div><label for="phone">登录手机号（收短信验证码）</label><input id="phone" type="tel" autocomplete="tel"></div>
         </div>
         <label for="password">HMRC 登录密码</label>
-        <input id="password" type="password" autocomplete="new-password" required>
+        <input id="password" type="password" autocomplete="new-password">
         <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
+        <div class="hint" id="credential-hint">登录信息只记在服务器本机内存里，失败重试不用再输密码；重启服务即失效。</div>
+        <button id="clear-credentials" class="secondary" type="button" hidden>清除已记住的登录信息</button>
       </div>
 
       <div class="section" id="identity-section">
@@ -192,6 +194,7 @@ let extractedValues = {};
 let extractedLabels = {};
 let identityCount = 0;
 let identityRequired = 3;
+let credentialsRemembered = false;
 let extractionConfirmed = false;
 let currentStatus = 'idle';
 let reviewChangesSignature = '';
@@ -442,6 +445,9 @@ $('start-form').addEventListener('submit', async event => {
   if (!extractionConfirmed) { setMessage('form-error', '请先检查提取结果并点击“确认资料无误”。', 'error'); return; }
   if (!extractedValues.full_name) { setMessage('form-error', '资料中缺少负责人姓名，请先解析文档或在提取结果中补充。', 'error'); return; }
   if (identityCount < identityRequired) { setMessage('form-error', `请先保存 ${identityRequired} 份身份证明文件。`, 'error'); return; }
+  if (!credentialsRemembered && (!$('email').value || !$('password').value)) {
+    setMessage('form-error', '请先填写 HMRC 登录邮箱和密码（已记住登录信息时可以不填）。', 'error'); return;
+  }
   const credentials = {
     HMRC_SIGN_IN_METHOD:$('method').value, HMRC_EMAIL:$('email').value,
     HMRC_USER_ID:$('user-id').value, HMRC_PASSWORD:$('password').value,
@@ -455,6 +461,17 @@ $('start-form').addEventListener('submit', async event => {
     if (!response.ok) throw new Error(body.detail || '启动失败');
     $('password').value = '';
   } catch (error) { setMessage('form-error', error.message, 'error'); }
+});
+
+$('clear-credentials').addEventListener('click', async () => {
+  setMessage('form-error', '');
+  const response = await post('/api/credentials/clear', {});
+  const body = await response.json();
+  if (!response.ok) { setMessage('form-error', body.detail || '清除失败', 'error'); return; }
+  credentialsRemembered = false;
+  $('password').value = '';
+  $('clear-credentials').hidden = true;
+  $('credential-hint').textContent = '已清除记住的登录信息，下次启动请重新填写邮箱和密码。';
 });
 
 $('send-code').addEventListener('click', async () => {
@@ -736,6 +753,11 @@ async function refresh() {
     $('pause').disabled = state.status !== 'running';
     $('continue').disabled = state.status !== 'paused';
     identityCount = state.identity_documents || identityCount;
+    credentialsRemembered = !!state.credentials_saved;
+    $('clear-credentials').hidden = !credentialsRemembered;
+    if (credentialsRemembered) {
+      $('credential-hint').textContent = '已记住上次的 HMRC 登录信息（仅本机内存）：失败重试不用再输密码，重启服务即失效。';
+    }
     showFlow(state.flow_name || '', state.config || '');
     const required = Number(state.identity_required ?? 3);
     if (required !== identityRequired) {

@@ -174,9 +174,11 @@
         </div>
         <label for="hmrc-password">开户密码</label>
         <input id="hmrc-password" type="password" autocomplete="new-password">
+        <p class="hint">登录信息只记在服务器本机内存里：失败重试不用再输密码，重启服务即失效。</p>
         <label class="check"><input id="extracted-ok" type="checkbox"> 已检查客户资料，确认无误</label>
         <div class="actions">
           <button id="start-automation" type="button" disabled>启动自动化</button>
+          <button id="clear-credentials" class="secondary" type="button">清除已记住的登录信息</button>
         </div>
       </div>
       <div id="otp">
@@ -963,6 +965,22 @@ $("send-code").addEventListener("click", async () => {
       body: JSON.stringify({code: $("code").value})
     });
     $("code").value = "";
+  } catch (error) {
+    $("run-status").style.display = "block";
+    $("run-status").className = "status blocked";
+    $("run-status").textContent = error.message;
+  }
+});
+$("clear-credentials").addEventListener("click", async () => {
+  try {
+    await api("/api/credentials/clear", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({})
+    });
+    $("hmrc-password").value = "";
+    $("run-status").style.display = "block";
+    $("run-status").className = "status";
+    $("run-status").textContent = "已清除本机记住的登录信息，下次启动请重新填写邮箱和密码。";
   } catch (error) {
     $("run-status").style.display = "block";
     $("run-status").className = "status blocked";

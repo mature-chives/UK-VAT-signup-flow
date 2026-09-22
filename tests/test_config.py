@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,7 @@ from vat_automation.config import (
 )
 from vat_automation.document_parser import prepare_document_values
 from vat_automation.runner import (
+    BROWSER_ERROR_RETRIES,
     SAFE_ACTIONS,
     AutomationStopped,
     Control,
@@ -1520,6 +1522,124 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertFalse(
             VatAutomation._is_remote_error_heading("Check your answers")
+        )
+
+
+class BrowserErrorRecoveryTests(unittest.TestCase):
+    """HMRC 偶发 ERR_CONNECTION_CLOSED 时应退回上一页重试，而不是直接停。"""
+
+    def test_browser_error_page_is_detected(self) -> None:
+        self.assertTrue(
+            VatAutomation._is_browser_error_page("chrome-error://chromewebdata/", "")
+        )
+        self.assertTrue(
+            VatAutomation._is_browser_error_page("https://x.test", "无法访问此网站")
+        )
+        self.assertTrue(
+            VatAutomation._is_browser_error_page(
+                "https://x.test", "This site can’t be reached"
+            )
+        )
+        self.assertFalse(
+            VatAutomation._is_browser_error_page(
+                "https://www.tax.service.gov.uk/register-for-vat/", "Check your answers"
+            )
+        )
+
+    def test_browser_error_is_retried_from_last_good_page(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "chrome-error://chromewebdata/"
+                self.gotos: list[str] = []
+
+            async def wait_for_load_state(self, _state: str) -> None:
+                return None
+
+            async def wait_for_timeout(self, _ms: int) -> None:
+                return None
+
+            async def goto(self, url: str, wait_until: str | None = None) -> None:
+                self.gotos.append(url)
+                self.url = url
+
+        class RetryRunner(VatAutomation):
+            events: list[str] = []
+            snapshots: list[str] = []
+
+            async def _heading(self, page: object) -> str:
+                url = getattr(page, "url", "")
+                return "无法访问此网站" if url.startswith("chrome-error") else "Get an EORI number"
+
+            async def _audit(self, event: str, **_details: object) -> None:
+                self.events.append(event)
+
+            async def _snapshot(
+                self, _page: object, _heading: str, *, reason: str, missing: object = None
+            ) -> Path:
+                self.snapshots.append(reason)
+                return Path("/private/tmp/never-written.png")
+
+        settings = Settings(
+            start_url="https://www.gov.uk/eori/apply-for-eori",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={},
+            pages=[],
+            max_steps=1,
+        )
+        page = FakePage()
+        runner = RetryRunner(settings, interactive=False)
+        runner._last_good_url = "https://www.gov.uk/eori/apply-for-eori"
+        # 恢复成功后会继续循环，因此这里只会因为步数上限结束，而不是网络错误。
+        with self.assertRaisesRegex(AutomationStopped, "最大步骤数"):
+            asyncio.run(runner._drive(page))
+        self.assertEqual(page.gotos, ["https://www.gov.uk/eori/apply-for-eori"])
+        self.assertIn("browser-error-retry", runner.events)
+        self.assertEqual(runner.snapshots, [])
+
+    def test_network_error_stops_with_clear_reason(self) -> None:
+        class FakePage:
+            url = "chrome-error://chromewebdata/"
+
+            async def wait_for_load_state(self, _state: str) -> None:
+                return None
+
+            async def wait_for_timeout(self, _ms: int) -> None:
+                return None
+
+            async def goto(self, _url: str, wait_until: str | None = None) -> None:
+                return None  # 仍停留在错误页
+
+        class AlwaysErrorRunner(VatAutomation):
+            events: list[str] = []
+            snapshots: list[str] = []
+
+            async def _heading(self, _page: object) -> str:
+                return "无法访问此网站"
+
+            async def _audit(self, event: str, **_details: object) -> None:
+                self.events.append(event)
+
+            async def _snapshot(
+                self, _page: object, _heading: str, *, reason: str, missing: object = None
+            ) -> Path:
+                self.snapshots.append(reason)
+                return Path("/private/tmp/never-written.png")
+
+        settings = Settings(
+            start_url="https://www.gov.uk/eori/apply-for-eori",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={},
+            pages=[],
+        )
+        runner = AlwaysErrorRunner(settings, interactive=False)
+        runner._last_good_url = "https://www.gov.uk/eori/apply-for-eori"
+        with self.assertRaisesRegex(AutomationStopped, "连接错误"):
+            asyncio.run(runner._drive(FakePage()))
+        self.assertEqual(runner.snapshots, ["network-error"])
+        self.assertEqual(
+            runner.events.count("browser-error-retry"), BROWSER_ERROR_RETRIES
         )
 
     def test_skip_action_runs_before_required_field_scan(self) -> None:

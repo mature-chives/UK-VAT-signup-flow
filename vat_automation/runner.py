@@ -43,6 +43,20 @@ AUTH_HOSTS = {
     "access.service.gov.uk",
     "www.access.service.gov.uk",
 }
+# Chrome 自己的错误页：网络抖动、代理断开时会出现，不是 HMRC 的页面。
+BROWSER_ERROR_URL_PREFIX = "chrome-error://"
+# 中文标题在 normalize() 里会被清空，所以中文单独按原文比对。
+BROWSER_ERROR_HEADINGS = ("无法访问此网站",)
+BROWSER_ERROR_HEADINGS_NORMALIZED = (
+    "cant be reached",
+    # 弯撇号经 normalize() 会变成空格：This site can’t → "can t"
+    "can t be reached",
+    "err connection",
+    "your connection is not private",
+)
+# 网络抖动时退回上一页重试的次数（单次错误），以及整个任务允许的恢复总次数。
+BROWSER_ERROR_RETRIES = 2
+BROWSER_ERROR_RECOVERY_LIMIT = 3
 
 
 @dataclass(slots=True)
@@ -107,6 +121,9 @@ class VatAutomation:
         # 多用户场景下用于在审计记录里标注操作人，不含任何凭据。
         self.audit_context = dict(audit_context or {})
         self._pending_file_path: str | None = None
+        # 记录最后一个正常页面，网络抖动后从这里重试；并统计恢复次数避免死循环。
+        self._last_good_url = ""
+        self._browser_error_recoveries = 0
         self.settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True)
         self.audit_path = self.settings.artifacts_dir / "audit.jsonl"
@@ -149,6 +166,17 @@ class VatAutomation:
             await self._audit("page", step=step, url=page.url, heading=heading)
             if self.pause_checkpoint_provider is not None:
                 await self.pause_checkpoint_provider(page.url, heading)
+
+            if self._is_browser_error_page(page.url, heading):
+                if await self._recover_from_browser_error(page, heading):
+                    continue
+                await self._snapshot(page, heading, reason="network-error")
+                raise AutomationStopped(
+                    "浏览器打不开 HMRC 页面（Chrome 报连接错误），已自动重试 "
+                    f"{BROWSER_ERROR_RETRIES} 次仍未成功：{heading or page.url}。"
+                    "请检查本机网络或代理后重新启动任务。"
+                )
+            self._last_good_url = page.url
 
             if self._is_remote_error_heading(heading):
                 await self._snapshot(page, heading, reason="remote-service-error")
@@ -258,6 +286,49 @@ class VatAutomation:
             await page.wait_for_timeout(350)
 
         raise AutomationStopped(f"已达到最大步骤数 {self.settings.max_steps}。")
+
+    @staticmethod
+    def _is_browser_error_page(url: str, heading: str) -> bool:
+        """Chrome 的网络错误页（连接被重置、代理断开等），不是 HMRC 的页面。"""
+        if url.startswith(BROWSER_ERROR_URL_PREFIX):
+            return True
+        lowered = heading.casefold()
+        if any(marker in lowered for marker in BROWSER_ERROR_HEADINGS):
+            return True
+        text = normalize(heading)
+        return any(marker in text for marker in BROWSER_ERROR_HEADINGS_NORMALIZED)
+
+    async def _recover_from_browser_error(self, page: Any, heading: str) -> bool:
+        """网络抖动后退回上一个正常页面重试，成功返回 True。
+
+        HMRC 偶发 ERR_CONNECTION_CLOSED，一次抖动不该让整个申请作废。
+        """
+        if not self._last_good_url:
+            return False
+        if self._browser_error_recoveries >= BROWSER_ERROR_RECOVERY_LIMIT:
+            await self._audit(
+                "browser-error-recovery-exhausted",
+                url=page.url,
+                heading=heading,
+                recoveries=self._browser_error_recoveries,
+            )
+            return False
+        for attempt in range(1, BROWSER_ERROR_RETRIES + 1):
+            self._browser_error_recoveries += 1
+            await self._audit(
+                "browser-error-retry",
+                attempt=attempt,
+                url=self._last_good_url,
+                heading=heading,
+            )
+            await page.wait_for_timeout(2000 * attempt)
+            try:
+                await page.goto(self._last_good_url, wait_until="domcontentloaded")
+            except Exception:
+                continue
+            if not self._is_browser_error_page(page.url, await self._heading(page)):
+                return True
+        return False
 
     async def _handle_auth(self, page: Any, heading: str) -> None:
         """自动处理凭据和安全方式，仅验证码由用户即时输入。"""

@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -708,6 +709,77 @@ class EndpointTests(WebAuthContext):
         self.assertIn("/api/setup", setup_html)
         self.assertIn("初始化码", setup_html)
         self.assertIn("至少 12 个字符", setup_html)
+
+
+class CredentialMemoryTests(unittest.TestCase):
+    """HMRC 登录信息只留在本机进程内存里，失败重试不必重新输入密码。"""
+
+    def setUp(self) -> None:
+        self._workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(self._workspace.cleanup)
+        base = Path(self._workspace.name)
+        self.config_path = base / "vat-config.eori.flow.json"
+        self.config_path.write_text(
+            json.dumps({"identity_documents_required": 0}), encoding="utf-8"
+        )
+
+        class StubJobManager(JobManager):
+            runs: list[dict[str, str]] = []
+
+            def _run(
+                self,
+                session: object,
+                credentials: dict[str, str],
+                extracted_values: dict[str, str],
+                fresh_session: bool,
+                resume: bool,
+            ) -> None:
+                self.runs.append(dict(credentials))
+
+        StubJobManager.runs = []
+        self.manager = StubJobManager(self.config_path)
+
+    def _start(self, **credentials: str) -> None:
+        self.manager.start(
+            "alice",
+            StartRequest(extracted_confirmed=True, credentials=dict(credentials)),
+        )
+        session = self.manager.session("alice")
+        self.assertIsNotNone(session.thread)
+        session.thread.join(timeout=5)
+
+    def test_password_is_reused_after_a_failed_run(self) -> None:
+        self._start(HMRC_EMAIL="a@example.test", HMRC_PASSWORD="secret-1")
+        self.assertEqual(self.manager.runs[0]["HMRC_PASSWORD"], "secret-1")
+        self.manager._set_terminal_state(
+            self.manager.session("alice"), "failed", "网络中断"
+        )
+        # 失败后网页只发空密码，服务端用内存里记住的补齐。
+        self._start(HMRC_PASSWORD="")
+        self.assertEqual(self.manager.runs[1]["HMRC_PASSWORD"], "secret-1")
+        self.assertEqual(self.manager.runs[1]["HMRC_EMAIL"], "a@example.test")
+        # 换密码时新值优先。
+        self.manager._set_terminal_state(
+            self.manager.session("alice"), "failed", "网络中断"
+        )
+        self._start(HMRC_PASSWORD="secret-2")
+        self.assertEqual(self.manager.runs[2]["HMRC_PASSWORD"], "secret-2")
+
+    def test_snapshot_only_reports_whether_credentials_are_kept(self) -> None:
+        self._start(HMRC_PASSWORD="secret-1")
+        snapshot = self.manager.snapshot("alice")
+        self.assertTrue(snapshot["credentials_saved"])
+        self.assertNotIn("secret-1", json.dumps(snapshot, ensure_ascii=False))
+
+    def test_clear_credentials_forgets_password(self) -> None:
+        self._start(HMRC_PASSWORD="secret-1")
+        self.manager._set_terminal_state(
+            self.manager.session("alice"), "failed", "网络中断"
+        )
+        self.manager.clear_credentials("alice")
+        self.assertFalse(self.manager.snapshot("alice")["credentials_saved"])
+        self._start(HMRC_PASSWORD="secret-3")
+        self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "secret-3")
 
 
 if __name__ == "__main__":

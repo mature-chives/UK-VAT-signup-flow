@@ -543,6 +543,20 @@ async def start_automation(
     return {"status": "starting"}
 
 
+@app.post("/api/credentials/clear")
+async def clear_credentials(
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, str]:
+    """清掉本机内存里记住的 HMRC 登录信息（多个业务一起清）。"""
+    for task_kind in AUTOMATION_FLOWS:
+        try:
+            context.job_manager(task_kind).clear_credentials(username)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "cleared"}
+
+
 @app.post("/api/tasks/{task_id}/{flow}/code")
 async def automation_code(
     task_id: str,

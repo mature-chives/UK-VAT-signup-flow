@@ -11,6 +11,8 @@
 - 初始诚信声明页会自动点击 `Accept and continue`；若检测到明显测试资料会直接停止。
 - 到达 `Check your answers` 时保存整页复核文件并暂停；只有网页用户明确勾选确认后，程序才会点击 `Confirm and submit`。
 - 测试配置默认设置 `allow_live_application: false`，进入真实 VAT 申请数据区前停止，防止把随机资料写入 HMRC。
+- 网页上填过的 HMRC 登录信息只记在**服务端进程内存**里，失败重试不用重新输密码；重启服务即失效，网页上可点「清除已记住的登录信息」。密码不写入配置、状态接口或审计日志。
+- 浏览器连不上 HMRC（Chrome 报 `ERR_CONNECTION_CLOSED` 之类）时，程序会先退回上一页自动重试 2 次；仍失败才停止并保存 `artifacts*-network-error.png`，不会把网络抖动当成配置问题。
 - 浏览器会话保存在本地 `.browser-profile/`，运行记录保存在 `artifacts/`，两者均默认忽略，不应提交到版本库。
 - 不要把 Government Gateway 用户名、密码或 MFA 密钥写入 JSON；用户名和密码仅通过进程环境变量传入，验证码只在内存中短暂使用。
 

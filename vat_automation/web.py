@@ -143,6 +143,8 @@ class UserSession:
     active_identity_documents: list[Path] = field(default_factory=list)
     final_review: dict[str, Any] = field(default_factory=dict)
     final_review_edit: dict[str, Any] = field(default_factory=dict)
+    # 登录信息只留在进程内存里，方便失败后重试；重启服务即失效，绝不落盘。
+    saved_credentials: dict[str, str] = field(default_factory=dict)
     review_action: str = ""
     review_target: str = ""
     thread: threading.Thread | None = None
@@ -209,6 +211,7 @@ class JobManager:
                 "events": list(session.state["events"]),
                 "identity_documents": len(session.identity_documents),
                 "identity_required": self.identity_documents_required,
+                "credentials_saved": bool(session.saved_credentials),
                 "flow_name": self.flow_name,
                 "final_review": {
                     "available": bool(session.final_review),
@@ -240,7 +243,7 @@ class JobManager:
                 f"请先保存正好 {self.identity_documents_required} 份身份证明文件。"
             )
 
-        credentials = {
+        provided = {
             key: value.strip()
             for key, value in request.credentials.items()
             if key in ALLOWED_ENV_KEYS and value.strip()
@@ -252,6 +255,10 @@ class JobManager:
                 raise RuntimeError(
                     f"当前有 {self._busy_with} 的任务在运行，请等待其结束后再开始。"
                 )
+            # 失败重试时网页不会再传密码，用本机进程内存里记住的补齐（只补缺的键）。
+            credentials = {**session.saved_credentials, **provided}
+            if provided:
+                session.saved_credentials = dict(credentials)
             self._busy_with = session.username
             session.state = {
                 **_initial_state(),
@@ -301,6 +308,14 @@ class JobManager:
                 raise RuntimeError("验证码已经提交，请等待页面处理。") from exc
             session.state["status"] = "running"
             session.state["message"] = "验证码已收到，正在继续"
+
+    def clear_credentials(self, username: str) -> None:
+        """忘掉本机内存里记住的登录信息（换账号时手动清理）。"""
+        session = self.session(username)
+        with self._lock:
+            if session.state["status"] in ACTIVE_STATES:
+                raise RuntimeError("自动化运行中不能清除登录信息。")
+            session.saved_credentials = {}
 
     def pause(self, username: str) -> None:
         session = self.session(username)
@@ -902,6 +917,19 @@ async def start(
     except (OSError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "starting"}
+
+
+@app.post("/api/credentials/clear")
+async def clear_credentials(
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, str]:
+    """清掉本机内存里记住的 HMRC 登录信息（换账号时用）。"""
+    try:
+        context.jobs().clear_credentials(username)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "cleared"}
 
 
 @app.post("/api/code")
