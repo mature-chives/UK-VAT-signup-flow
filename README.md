@@ -164,7 +164,21 @@ vat-register --config vat-config.eori.test.json
 
 ## 销售交付工作台
 
-业务菜单由插件登记，不写死种类。新增一种业务=增加一个插件模块并 `register()`。销售与交付暂用同一套菜单；客户资料可在多个任务间勾选复用。英国 VAT 的 Chrome 仍在服务器本机运行，同事只看状态和验证码。
+业务菜单由插件登记，不写死种类。新增一种业务=增加一个插件模块并 `register()`。销售与交付暂用同一套菜单；客户资料可在多个任务间勾选复用。注册类业务的 Chrome 仍在服务器本机运行，同事只看状态、交验证码、核对最终 PDF。
+
+目前已登记两个注册业务，各自绑定一份流程配置，互不影响：
+
+| 菜单 | 插件 | 流程配置 |
+| --- | --- | --- |
+| 英国 VAT 注册 | `uk-vat-register` | `--uk-vat-config`（默认 `vat-config.flow.json`），需要 3 份身份证明 |
+| 英国 EORI 注册 | `uk-eori-register` | `--uk-eori-config`（默认 `vat-config.eori.flow.json`），不需要身份证明 |
+
+```bash
+.venv/bin/vat-bench --uk-vat-config vat-config.flow.json \
+  --uk-eori-config vat-config.eori.flow.json
+```
+
+两个业务都会走到最终核对页暂停：网页展示核对内容、可下载整页 PDF、可按字段远程改值，只有点「确认并提交到 HMRC」才会提交。
 
 证件识别需要已安装 `paddleocr` 的 Python（可选 extra：`pip install -e '.[ocr]'`）。百度翻译密钥放项目根目录 `.env`（已忽略，模板见 `.env.example`），启动时自动读入。
 

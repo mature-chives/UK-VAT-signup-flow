@@ -50,4 +50,4 @@ def load_builtin_plugins() -> None:
     """导入内置插件模块，由其自行 register。"""
     if _REGISTRY:
         return
-    from .plugins import sa_vat, translate, uk_vat  # noqa: F401
+    from .plugins import eori, sa_vat, translate, uk_vat  # noqa: F401

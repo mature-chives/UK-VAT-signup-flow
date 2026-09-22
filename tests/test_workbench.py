@@ -6,9 +6,13 @@ from pathlib import Path
 from workbench.app import (
     CustomerRequest,
     TaskCreateRequest,
+    UkVatStartRequest,
+    _automation_target,
+    _sync_automation_task,
     create_task,
     plugins,
     save_customer,
+    start_automation,
     upload_translation,
 )
 from workbench.catalog import (
@@ -31,6 +35,7 @@ class CatalogTests(unittest.TestCase):
             ids
             | {
                 "uk-vat-register",
+                "uk-eori-register",
                 "sa-vat-register",
                 "translate-id",
                 "translate-license",
@@ -39,6 +44,7 @@ class CatalogTests(unittest.TestCase):
         )
         self.assertTrue(get_plugin("sa-vat-register").placeholder)
         self.assertEqual(get_plugin("uk-vat-register").task_kind, "uk_vat")
+        self.assertEqual(get_plugin("uk-eori-register").task_kind, "uk_eori")
 
     def test_plugins_declare_intake_for_the_workbench_wizard(self) -> None:
         load_builtin_plugins()
@@ -46,6 +52,10 @@ class CatalogTests(unittest.TestCase):
         cats = {item["category"]: item for item in uk["files"]}
         self.assertEqual(cats["identity"]["min"], 3)
         self.assertTrue(cats["authorization"].get("parse"))
+        eori = get_plugin("uk-eori-register").public()["intake"]
+        eori_cats = {item["category"]: item for item in eori["files"]}
+        self.assertNotIn("identity", eori_cats)
+        self.assertTrue(eori_cats["authorization"].get("parse"))
         translate = get_plugin("translate-id").public()["intake"]
         cats = {item["category"]: item for item in translate["files"]}
         self.assertEqual(cats["id-card-front"]["min"], 1)
@@ -177,7 +187,8 @@ class PageContractTests(unittest.TestCase):
             "upload-file",
             "parse-file",
             "create-task",
-            "start-uk-vat",
+            "start-automation",
+            "automation-box",
             "otp",
             "send-code",
             "translate-task",
@@ -217,6 +228,115 @@ class PageContractTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as caught:
             asyncio.run(asset("index.html"))
         self.assertEqual(caught.exception.status_code, 404)
+
+
+class AutomationRoutingTests(unittest.TestCase):
+    """工作台按 task_kind 把任务分派到各自的流程配置。"""
+
+    def setUp(self) -> None:
+        self._workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(self._workspace.cleanup)
+        base = Path(self._workspace.name)
+        self._saved = (
+            context.store, context.jobs, context.task_owners,
+            context.uk_vat_config, context.uk_eori_config,
+        )
+        context.store = WorkbenchStore(base / "data")
+        context.jobs = {}
+        context.task_owners = {}
+        context.uk_vat_config = base / "vat-config.flow.json"
+        context.uk_eori_config = base / "vat-config.eori.flow.json"
+        self.addCleanup(self._restore)
+        load_builtin_plugins()
+
+    def _restore(self) -> None:
+        (
+            context.store, context.jobs, context.task_owners,
+            context.uk_vat_config, context.uk_eori_config,
+        ) = self._saved
+
+    def _customer(self) -> str:
+        record = context.store.upsert_customer(
+            customer_id=None,
+            name="杭州示例",
+            project_code="AB000001",
+            fields={"business_name": "Example Ltd", "vat_number": "GB123456789"},
+        )
+        return record["id"]
+
+    def _task(self, plugin_id: str) -> dict:
+        return asyncio.run(
+            create_task(
+                TaskCreateRequest(
+                    plugin_id=plugin_id,
+                    customer_id=self._customer(),
+                    field_keys=["business_name", "vat_number"],
+                ),
+                username="alice",
+                _=None,
+            )
+        )
+
+    def test_each_business_gets_its_own_flow_config(self) -> None:
+        self._task("uk-vat-register")
+        self._task("uk-eori-register")
+        self.assertEqual(
+            context.job_manager("uk_vat").config_path, context.uk_vat_config
+        )
+        self.assertEqual(
+            context.job_manager("uk_eori").config_path, context.uk_eori_config
+        )
+        # 两个业务的 JobManager 互不共用。
+        self.assertIsNot(
+            context.job_manager("uk_vat"), context.job_manager("uk_eori")
+        )
+
+    def test_flow_prefix_must_match_task_kind(self) -> None:
+        task = self._task("uk-eori-register")
+        with self.assertRaises(Exception) as caught:
+            _automation_target(task["id"], "uk-vat")
+        self.assertEqual(getattr(caught.exception, "status_code", None), 404)
+        _, manager = _automation_target(task["id"], "uk-eori")
+        self.assertEqual(manager.config_path, context.uk_eori_config)
+
+    def test_snapshot_is_synced_for_eori_tasks(self) -> None:
+        task = self._task("uk-eori-register")
+
+        class StubManager:
+            def snapshot(self, username: str) -> dict:
+                return {"status": "reviewing", "message": "等待人工核对"}
+
+        context.jobs["uk_eori"] = StubManager()
+        context.task_owners[task["id"]] = "alice"
+        synced = _sync_automation_task(context.store.get_task(task["id"]))
+        self.assertEqual(synced["status"], "reviewing")
+        self.assertEqual(synced["automation"]["message"], "等待人工核对")
+
+    def test_eori_start_does_not_require_identity_documents(self) -> None:
+        task = self._task("uk-eori-register")
+        started: dict[str, object] = {}
+
+        class StubManager:
+            identity_documents_required = 0
+
+            def start(self, username: str, request: object) -> None:
+                started["user"] = username
+                started["values"] = dict(request.extracted_values)
+
+        context.jobs["uk_eori"] = StubManager()
+        result = asyncio.run(
+            start_automation(
+                task["id"],
+                "uk-eori",
+                UkVatStartRequest(extracted_confirmed=True, extracted_values={}),
+                "alice",
+                None,
+            )
+        )
+        self.assertEqual(result["status"], "starting")
+        self.assertEqual(started["user"], "alice")
+        # 没有勾选任何身份证明文件也不会报错，资料取任务上选的客户字段。
+        self.assertEqual(started["values"], {"business_name": "Example Ltd", "vat_number": "GB123456789"})
 
 
 if __name__ == "__main__":

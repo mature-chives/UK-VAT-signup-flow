@@ -48,6 +48,9 @@ from .store import WorkbenchStore
 
 ID_CARD_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
+# 已接入自动化的业务：插件 task_kind → URL 前缀。
+AUTOMATION_FLOWS: dict[str, str] = {"uk_vat": "uk-vat", "uk_eori": "uk-eori"}
+
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 load_builtin_plugins()
@@ -116,16 +119,25 @@ class ServerContext:
     store: WorkbenchStore = field(
         default_factory=lambda: WorkbenchStore(Path("workbench-data"))
     )
-    jobs: JobManager | None = None
+    # 每个业务一条自动化通道：task_kind → JobManager（各自读自己的流程配置）。
+    jobs: dict[str, JobManager] = field(default_factory=dict)
     uk_vat_config: Path = Path("vat-config.flow.json")
+    uk_eori_config: Path = Path("vat-config.eori.flow.json")
     secure_cookies: bool = True
     setup_token: str | None = None
     task_owners: dict[str, str] = field(default_factory=dict)
 
-    def job_manager(self) -> JobManager:
-        if self.jobs is None:
-            self.jobs = JobManager(self.uk_vat_config)
-        return self.jobs
+    def config_for(self, task_kind: str) -> Path:
+        if task_kind == "uk_eori":
+            return self.uk_eori_config
+        return self.uk_vat_config
+
+    def job_manager(self, task_kind: str = "uk_vat") -> JobManager:
+        manager = self.jobs.get(task_kind)
+        if manager is None:
+            manager = JobManager(self.config_for(task_kind))
+            self.jobs[task_kind] = manager
+        return manager
 
     def needs_setup(self) -> bool:
         return self.users.is_empty()
@@ -237,11 +249,13 @@ def _public_task(record: dict[str, Any]) -> dict[str, Any]:
     return {**record, "result_files": safe_files, "selected_files": selected}
 
 
-def _sync_uk_vat_task(task: dict[str, Any]) -> dict[str, Any]:
+def _sync_automation_task(task: dict[str, Any]) -> dict[str, Any]:
+    """把服务器本机自动化任务的状态同步回工作台任务记录。"""
+    task_kind = str(task.get("task_kind", ""))
     owner = context.task_owners.get(task["id"])
-    if not owner:
+    if not owner or task_kind not in AUTOMATION_FLOWS:
         return task
-    snap = context.job_manager().snapshot(owner)
+    snap = context.job_manager(task_kind).snapshot(owner)
     mapping = {
         "idle": task.get("status"),
         "starting": "in_progress",
@@ -261,10 +275,23 @@ def _sync_uk_vat_task(task: dict[str, Any]) -> dict[str, Any]:
             task["id"],
             status=status,
             message=snap.get("message", task.get("message")),
-            uk_vat=snap,
+            automation=snap,
         )
     except KeyError:
         return task
+
+
+def _automation_target(task_id: str, flow: str) -> tuple[dict[str, Any], JobManager]:
+    """按 URL 前缀找到任务和它对应的 JobManager，避免前端传配置路径。"""
+    task_kind = next(
+        (kind for kind, prefix in AUTOMATION_FLOWS.items() if prefix == flow), ""
+    )
+    if not task_kind:
+        raise HTTPException(status_code=404, detail="未知的自动化流程。")
+    task = context.store.get_task(task_id)
+    if task is None or task.get("task_kind") != task_kind:
+        raise HTTPException(status_code=404, detail="任务不存在或流程不匹配。")
+    return task, context.job_manager(task_kind)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -431,8 +458,8 @@ async def parse_customer_file(
 async def tasks(_: str = Depends(current_user)) -> dict[str, Any]:
     records = []
     for item in context.store.list_tasks():
-        if item.get("task_kind") == "uk_vat":
-            item = _sync_uk_vat_task(item)
+        if item.get("task_kind") in AUTOMATION_FLOWS:
+            item = _sync_automation_task(item)
         records.append(_public_task(item))
     return {"tasks": records}
 
@@ -463,33 +490,38 @@ async def create_task(
     return _public_task(record)
 
 
-@app.post("/api/tasks/{task_id}/uk-vat/start")
-async def start_uk_vat(
+@app.post("/api/tasks/{task_id}/{flow}/start")
+async def start_automation(
     task_id: str,
+    flow: str,
     payload: UkVatStartRequest,
     username: str = Depends(current_user),
     _: None = Depends(require_csrf),
 ) -> dict[str, str]:
-    task = context.store.get_task(task_id)
-    if task is None or task.get("task_kind") != "uk_vat":
-        raise HTTPException(status_code=404, detail="英国 VAT 任务不存在。")
+    task, manager = _automation_target(task_id, flow)
     if not payload.extracted_confirmed:
         raise HTTPException(status_code=400, detail="请先确认客户资料。")
-    identity = [
-        item
-        for item in task.get("selected_files", [])
-        if item.get("category") == "identity"
-    ]
-    if len(identity) != 3:
-        raise HTTPException(status_code=400, detail="请选择正好三份身份证明。")
-    manager = context.job_manager()
+    # 身份证明数量跟着流程配置走：VAT 三份，EORI 不需要上传。
+    required = manager.identity_documents_required
     documents: list[tuple[str, bytes]] = []
-    for item in identity:
-        path = Path(str(item["path"]))
-        if not path.is_file():
-            raise HTTPException(status_code=400, detail=f"身份证明已失效：{item.get('name')}")
-        documents.append((str(item["name"]), path.read_bytes()))
-    manager.store_identity_documents(username, documents)
+    if required:
+        identity = [
+            item
+            for item in task.get("selected_files", [])
+            if item.get("category") == "identity"
+        ]
+        if len(identity) != required:
+            raise HTTPException(
+                status_code=400, detail=f"请选择正好 {required} 份身份证明。"
+            )
+        for item in identity:
+            path = Path(str(item["path"]))
+            if not path.is_file():
+                raise HTTPException(
+                    status_code=400, detail=f"身份证明已失效：{item.get('name')}"
+                )
+            documents.append((str(item["name"]), path.read_bytes()))
+        manager.store_identity_documents(username, documents, required)
     values = payload.extracted_values or dict(task.get("selected_fields") or {})
     request = StartRequest(
         fresh_session=payload.fresh_session,
@@ -511,69 +543,77 @@ async def start_uk_vat(
     return {"status": "starting"}
 
 
-@app.post("/api/tasks/{task_id}/uk-vat/code")
-async def uk_vat_code(
+@app.post("/api/tasks/{task_id}/{flow}/code")
+async def automation_code(
     task_id: str,
+    flow: str,
     payload: CodeRequest,
     username: str = Depends(current_user),
     _: None = Depends(require_csrf),
 ) -> dict[str, str]:
+    _, manager = _automation_target(task_id, flow)
     if context.task_owners.get(task_id) != username:
-        raise HTTPException(status_code=409, detail="当前没有你的英国 VAT 运行任务。")
+        raise HTTPException(status_code=409, detail="当前没有你在这个任务上运行的任务。")
     try:
-        context.job_manager().submit_code(username, payload.code)
+        manager.submit_code(username, payload.code)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "accepted"}
 
 
-@app.post("/api/tasks/{task_id}/uk-vat/final-review/confirm")
-async def uk_vat_confirm(
+@app.post("/api/tasks/{task_id}/{flow}/final-review/confirm")
+async def automation_confirm(
     task_id: str,
+    flow: str,
     payload: FinalSubmitRequest,
     username: str = Depends(current_user),
     _: None = Depends(require_csrf),
 ) -> dict[str, str]:
+    _, manager = _automation_target(task_id, flow)
     if not payload.confirmed:
         raise HTTPException(status_code=400, detail="请明确确认后再提交。")
     if context.task_owners.get(task_id) != username:
-        raise HTTPException(status_code=409, detail="当前没有你的英国 VAT 运行任务。")
+        raise HTTPException(status_code=409, detail="当前没有你在这个任务上运行的任务。")
     try:
-        context.job_manager().confirm_final_review(username)
+        manager.confirm_final_review(username)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "confirmed"}
 
 
-@app.post("/api/tasks/{task_id}/uk-vat/final-review/edit")
-async def uk_vat_edit(
+@app.post("/api/tasks/{task_id}/{flow}/final-review/edit")
+async def automation_edit(
     task_id: str,
+    flow: str,
     payload: FinalEditRequest,
     username: str = Depends(current_user),
     _: None = Depends(require_csrf),
 ) -> dict[str, str]:
+    _, manager = _automation_target(task_id, flow)
     if context.task_owners.get(task_id) != username:
-        raise HTTPException(status_code=409, detail="当前没有你的英国 VAT 运行任务。")
+        raise HTTPException(status_code=409, detail="当前没有你在这个任务上运行的任务。")
     try:
-        context.job_manager().request_final_review_edit(username, payload.target)
+        manager.request_final_review_edit(username, payload.target)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "editing"}
 
 
-@app.post("/api/tasks/{task_id}/uk-vat/final-review/edit/submit")
-async def uk_vat_edit_submit(
+@app.post("/api/tasks/{task_id}/{flow}/final-review/edit/submit")
+async def automation_edit_submit(
     task_id: str,
+    flow: str,
     payload: RemoteEditSubmitRequest,
     username: str = Depends(current_user),
     _: None = Depends(require_csrf),
 ) -> dict[str, str]:
+    _, manager = _automation_target(task_id, flow)
     if context.task_owners.get(task_id) != username:
-        raise HTTPException(status_code=409, detail="当前没有你的英国 VAT 运行任务。")
+        raise HTTPException(status_code=409, detail="当前没有你在这个任务上运行的任务。")
     from vat_automation.web import RemoteEditSubmitRequest as WebRemote
 
     try:
-        context.job_manager().submit_remote_edit(
+        manager.submit_remote_edit(
             username, WebRemote(answers=payload.answers, action=payload.action)
         )
     except ValueError as exc:
@@ -583,13 +623,14 @@ async def uk_vat_edit_submit(
     return {"status": "applying"}
 
 
-@app.get("/api/tasks/{task_id}/uk-vat/final-review/pdf")
-async def uk_vat_pdf(
-    task_id: str, username: str = Depends(current_user)
+@app.get("/api/tasks/{task_id}/{flow}/final-review/pdf")
+async def automation_pdf(
+    task_id: str, flow: str, username: str = Depends(current_user)
 ) -> FileResponse:
+    _, manager = _automation_target(task_id, flow)
     if context.task_owners.get(task_id) != username:
         raise HTTPException(status_code=404, detail="没有可下载的复核文件。")
-    path = context.job_manager().final_review_document(username, "pdf")
+    path = manager.final_review_document(username, "pdf")
     if path is None:
         raise HTTPException(status_code=404, detail="当前没有最终复核 PDF。")
     return FileResponse(path, media_type="application/pdf", filename="check-your-answers.pdf")
@@ -755,6 +796,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--users", type=Path, default=Path("users.json"))
     result.add_argument("--data", type=Path, default=Path("workbench-data"))
     result.add_argument("--uk-vat-config", type=Path, default=Path("vat-config.flow.json"))
+    result.add_argument(
+        "--uk-eori-config", type=Path, default=Path("vat-config.eori.flow.json")
+    )
     result.add_argument("--cert-dir", type=Path, default=Path("certs"))
     result.add_argument("--host", default="127.0.0.1")
     result.add_argument("--port", type=int, default=8770)
@@ -771,7 +815,8 @@ def main() -> None:
     context.users = UserStore(args.users.expanduser().resolve())
     context.store = WorkbenchStore(args.data.expanduser().resolve())
     context.uk_vat_config = args.uk_vat_config.expanduser().resolve()
-    context.jobs = None
+    context.uk_eori_config = args.uk_eori_config.expanduser().resolve()
+    context.jobs = {}
     context.task_owners = {}
 
     def banner(text: str) -> None:

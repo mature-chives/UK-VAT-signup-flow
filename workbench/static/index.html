@@ -98,6 +98,14 @@
           <div><label for="field-phone">电话</label><input id="field-phone" data-field="phone"></div>
           <div><label for="field-uscc">统一社会信用代码</label><input id="field-uscc" data-field="company_registration_number"></div>
         </div>
+        <div class="row">
+          <div><label for="field-full-name">联系人姓名</label><input id="field-full-name" data-field="full_name"></div>
+          <div><label for="field-vat-number">英国 VAT 号</label><input id="field-vat-number" data-field="vat_number"></div>
+        </div>
+        <div class="row">
+          <div><label for="field-vat-reg-date">VAT 注册生效日期</label><input id="field-vat-reg-date" data-field="vat_registration_date" placeholder="YYYY-MM-DD"></div>
+          <div><label for="field-incorporation-date">公司成立日期</label><input id="field-incorporation-date" data-field="company_incorporation_date" placeholder="YYYY-MM-DD"></div>
+        </div>
       </details>
       <div class="actions">
         <button id="save-customer" type="button">保存客户</button>
@@ -151,7 +159,7 @@
         <span id="job-badge" class="badge"></span>
       </div>
       <div id="job-files" class="hint"></div>
-      <div id="uk-vat-box" style="display:none">
+      <div id="automation-box" style="display:none">
         <h3 id="action-title">启动注册</h3>
         <p class="hint">Chrome 在服务器本机启动。同事只能在这里看状态、交验证码。</p>
         <div class="row">
@@ -168,7 +176,7 @@
         <input id="hmrc-password" type="password" autocomplete="new-password">
         <label class="check"><input id="extracted-ok" type="checkbox"> 已检查客户资料，确认无误</label>
         <div class="actions">
-          <button id="start-uk-vat" type="button" disabled>启动英国 VAT 自动化</button>
+          <button id="start-automation" type="button" disabled>启动自动化</button>
         </div>
       </div>
       <div id="otp">
@@ -215,6 +223,8 @@
 
 <script>
 const $ = id => document.getElementById(id);
+const AUTOMATION_KINDS = ["uk_vat", "uk_eori"];
+const AUTOMATION_LABELS = {uk_vat: "英国 VAT 注册", uk_eori: "英国 EORI 注册"};
 const FIELD_LABELS = {
   business_name: "公司名",
   email: "邮箱",
@@ -224,7 +234,10 @@ const FIELD_LABELS = {
   first_name: "名",
   last_name: "姓",
   project_code: "项目编号",
-  vat_contact_email: "VAT 沟通邮箱"
+  vat_contact_email: "VAT 沟通邮箱",
+  vat_number: "英国 VAT 号",
+  vat_registration_date: "VAT 注册生效日期",
+  company_incorporation_date: "公司成立日期"
 };
 const CATEGORY_LABELS = {
   authorization: "授权表",
@@ -259,7 +272,7 @@ let customers = [];
 let tasks = [];
 let currentPlugin = null;
 let currentCustomerId = "";
-let currentUkTaskId = "";
+let currentAutomationTaskId = "";
 let selectedTaskId = "";
 let taskFilter = "all";
 let workspaceMode = "desk";
@@ -295,6 +308,12 @@ function fillFields(fields) {
 }
 function selectedCustomer() {
   return customers.find(item => item.id === currentCustomerId) || null;
+}
+function isAutomationKind(kind) {
+  return AUTOMATION_KINDS.includes(kind);
+}
+function automationPrefix(kind) {
+  return kind === "uk_eori" ? "uk-eori" : "uk-vat";
 }
 function intakeFiles() {
   return (currentPlugin && currentPlugin.intake && currentPlugin.intake.files) || [];
@@ -343,7 +362,7 @@ function pluginIdFromHash() {
 }
 function syncCreateEnabled() {
   $("create-task").disabled = !currentPlugin || !currentCustomerId;
-  $("start-uk-vat").disabled = !currentUkTaskId;
+  $("start-automation").disabled = !currentAutomationTaskId;
   $("wizard-next-1").disabled = !currentCustomerId;
 }
 function showHome() {
@@ -400,7 +419,7 @@ function renderPlugins() {
       const total = pluginTasks(item.id).length;
       const pills = [
         item.placeholder ? `<span class="pill pill-amber">占位</span>` : "",
-        item.task_kind === "uk_vat" ? `<span class="pill pill-blue">本机 Chrome</span>` : "",
+        isAutomationKind(item.task_kind) ? `<span class="pill pill-blue">本机 Chrome</span>` : "",
         item.id === "translate-id" ? `<span class="pill pill-purple">本机识别</span>` : "",
         live ? `<span class="pill pill-count">进行中 ${live}</span>` : (total ? `<span class="pill">${total} 个任务</span>` : "")
       ].join("");
@@ -628,7 +647,7 @@ function renderIdCardFields(fields, translated) {
 }
 function renderJob() {
   const task = selectedTask();
-  const isUk = currentPlugin && currentPlugin.task_kind === "uk_vat";
+  const isAutomation = currentPlugin && isAutomationKind(currentPlugin.task_kind);
   const isTranslate = currentPlugin && currentPlugin.task_kind === "translate";
   const isIdCard = currentPlugin && currentPlugin.id === "translate-id";
   if (!task) {
@@ -636,7 +655,7 @@ function renderJob() {
     $("job-meta").textContent = "";
     $("job-badge").textContent = "";
     $("job-files").textContent = "";
-    $("uk-vat-box").style.display = "none";
+    $("automation-box").style.display = "none";
     $("id-card-box").style.display = "none";
     $("translate-box").style.display = "none";
     $("id-card-download-wrap").hidden = true;
@@ -657,8 +676,9 @@ function renderJob() {
     results.map(item => `<a href="/api/tasks/${esc(task.id)}/files/${esc(item.id)}" target="_blank" rel="noopener">${esc(item.name)}</a>`).join(" · ")
   ].filter(Boolean).join("<br>");
   const started = ["in_progress", "waiting", "reviewing", "delivered", "blocked"].includes(task.status);
-  $("uk-vat-box").style.display = isUk && !started ? "block" : "none";
-  $("start-uk-vat").style.display = isUk && !started ? "inline-block" : "none";
+  $("automation-box").style.display = isAutomation && !started ? "block" : "none";
+  $("start-automation").style.display = isAutomation && !started ? "inline-block" : "none";
+  $("start-automation").textContent = `启动${AUTOMATION_LABELS[task.task_kind] || currentPlugin.name || "自动化"}自动化`;
   $("id-card-box").style.display = isIdCard ? "block" : "none";
   $("translate-box").style.display = isTranslate && !isIdCard ? "block" : "none";
   if (isIdCard) {
@@ -684,7 +704,7 @@ function renderJob() {
   } else {
     $("id-card-download-wrap").hidden = true;
   }
-  if (isUk && started) showUkStatus(task);
+  if (isAutomation && started) showAutomationStatus(task);
   else if (isIdCard) {
     $("run-status").style.display = "none";
     $("otp").style.display = "none";
@@ -711,7 +731,7 @@ function selectTask(id, fromHistory) {
     $("customer-select").value = currentCustomerId;
     applyCustomer(selectedCustomer());
   }
-  if (task.task_kind === "uk_vat") currentUkTaskId = task.id;
+  if (isAutomationKind(task.task_kind)) currentAutomationTaskId = task.id;
   workspaceMode = "job";
   if (currentPlugin) pushWorkbench(currentPlugin.id + "/" + task.id, fromHistory);
   syncView();
@@ -719,11 +739,11 @@ function selectTask(id, fromHistory) {
   renderTasks();
   syncCreateEnabled();
 }
-function showUkStatus(task) {
+function showAutomationStatus(task) {
   $("run-status").style.display = "block";
   $("run-status").className = "status " + (task.status || "");
   $("run-status").textContent = task.message || statusLabel(task.status);
-  const snap = task.uk_vat || {};
+  const snap = task.automation || {};
   $("otp").style.display = snap.status === "waiting_code" ? "block" : "none";
 }
 
@@ -784,9 +804,9 @@ async function refresh() {
     if (workspaceMode === "job") {
       renderJob();
       const task = selectedTask();
-      if (task && task.task_kind === "uk_vat" && ["in_progress", "waiting", "reviewing"].includes(task.status)) {
-        currentUkTaskId = task.id;
-        showUkStatus(task);
+      if (task && isAutomationKind(task.task_kind) && ["in_progress", "waiting", "reviewing"].includes(task.status)) {
+        currentAutomationTaskId = task.id;
+        showAutomationStatus(task);
       }
     }
   } else {
@@ -895,7 +915,7 @@ $("create-task").addEventListener("click", async () => {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({plugin_id: currentPlugin.id, customer_id: currentCustomerId, field_keys, file_ids})
     });
-    currentUkTaskId = task.task_kind === "uk_vat" ? task.id : currentUkTaskId;
+    if (isAutomationKind(task.task_kind)) currentAutomationTaskId = task.id;
     selectedTaskId = task.id;
     $("task-msg").className = "msg ok";
     $("task-msg").textContent = task.placeholder ? "已占位" : "任务已创建";
@@ -906,11 +926,12 @@ $("create-task").addEventListener("click", async () => {
     $("task-msg").textContent = error.message;
   }
 });
-$("start-uk-vat").addEventListener("click", async () => {
-  if (!currentUkTaskId) { $("task-msg").className = "msg error"; $("task-msg").textContent = "请先创建英国 VAT 任务"; return; }
+$("start-automation").addEventListener("click", async () => {
+  if (!currentAutomationTaskId) { $("task-msg").className = "msg error"; $("task-msg").textContent = "请先创建任务"; return; }
   const customer = selectedCustomer() || {};
+  const flow = automationPrefix(currentPlugin && currentPlugin.task_kind);
   try {
-    await api(`/api/tasks/${currentUkTaskId}/uk-vat/start`, {
+    await api(`/api/tasks/${currentAutomationTaskId}/${flow}/start`, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         extracted_confirmed: $("extracted-ok").checked,
@@ -934,9 +955,10 @@ $("start-uk-vat").addEventListener("click", async () => {
   }
 });
 $("send-code").addEventListener("click", async () => {
-  if (!currentUkTaskId) return;
+  if (!currentAutomationTaskId) return;
+  const flow = automationPrefix(currentPlugin && currentPlugin.task_kind);
   try {
-    await api(`/api/tasks/${currentUkTaskId}/uk-vat/code`, {
+    await api(`/api/tasks/${currentAutomationTaskId}/${flow}/code`, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({code: $("code").value})
     });

@@ -69,8 +69,12 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
 # 改动 eori_flow.py 后重新生成可提交的流程配置
 .venv/bin/python scripts/generate_eori_config.py
 
-# 单用户 Web UI（资料袋解析 + 验证码 + 最终核对）
-.venv/bin/vat-web --config vat-config.eori.flow.json
+# 单用户 Web UI（资料袋解析 + 验证码 + 最终核对），EORI 用 8766 与 VAT 分开跑
+.venv/bin/vat-web --config vat-config.eori.flow.json --port 8766
+
+# 销售交付工作台：一个菜单里同时有「英国 VAT 注册」和「英国 EORI 注册」
+.venv/bin/vat-bench --uk-vat-config vat-config.flow.json \
+  --uk-eori-config vat-config.eori.flow.json
 
 # 命令行：先生成纯虚构的冒烟配置，不会写进真实申请
 .venv/bin/python scripts/generate_eori_config.py --test
@@ -104,7 +108,19 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
   按截图补 `heading_contains` 即可。
 - SIC 固定 47910、是否 VAT group 固定 `No`、是否同意公开名称地址固定 `No`，都是当前
   海外电商客户的业务模型；换业务类型前需要确认。
-- 尚未接入销售交付工作台（`vat-bench`）：工作台目前只登记 VAT 插件，EORI 走
-  `vat-web` 或命令行。接入方式见 `workbench/catalog.py` 的插件登记约定。
-- 流程只在离线层面验证过（186 个单元测试、覆盖率检查、`scripts/eori_smoke.py`
+- 流程只在离线层面验证过（190 个单元测试、覆盖率检查、`scripts/eori_smoke.py`
   本地模拟页面走通 16 个填表页并停在最终核对），没有在真实 HMRC 环境跑完整申请。
+
+## 7. 工作台接入
+
+工作台按插件登记业务菜单（`workbench/plugins/eori.py`，`task_kind` 为 `uk_eori`），
+每个业务配一条独立的自动化通道，流程配置只在服务端启动参数里指定：
+
+| 菜单 | 插件 | 流程配置 | 身份证明 |
+| --- | --- | --- | --- |
+| 英国 VAT 注册 | `uk-vat-register` | `--uk-vat-config`（默认 `vat-config.flow.json`） | 必须 3 份 |
+| 英国 EORI 注册 | `uk-eori-register` | `--uk-eori-config`（默认 `vat-config.eori.flow.json`） | 不需要 |
+
+工作台里 EORI 任务的流程与 VAT 完全一致：勾选客户资料 → 启动 → 交验证码 →
+到达 `Check your answers` 时网页显示核对内容并可下载整页 PDF → 只有点「确认并提交到 HMRC」
+才会真正提交；远程改值（Change 项）也复用同一套。

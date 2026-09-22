@@ -393,14 +393,17 @@ class JobManager:
         return candidate if candidate.is_file() else None
 
     def store_identity_documents(
-        self, username: str, documents: list[tuple[str, bytes]]
+        self,
+        username: str,
+        documents: list[tuple[str, bytes]],
+        expected: int = 3,
     ) -> list[str]:
         allowed = {
             ".jpg", ".jpeg", ".bmp", ".png", ".pdf", ".doc", ".docx",
             ".xls", ".xlsx", ".gif", ".txt",
         }
-        if len(documents) != 3:
-            raise ValueError("请一次选择三份身份证明文件。")
+        if len(documents) != expected:
+            raise ValueError(f"请一次选择 {expected} 份身份证明文件。")
         session = self.session(username)
         saved: list[Path] = []
         with self._lock:
