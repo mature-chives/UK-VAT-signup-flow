@@ -12,7 +12,7 @@ HMRC 的 EORI 服务与 VAT 服务同一个域名（`tax.service.gov.uk`），�
 | 截图 | 页面 | 自动化取值 |
 | --- | --- | --- |
 | image1、image2 | GOV.UK「Get an EORI number」「Apply for an EORI number」指南页 | `start_url` 入口，点 `Start now` |
-| image4 | HMRC 登录方式（Government Gateway／One Login／Create new sign in details） | `HMRC_SIGN_IN_METHOD`，缺省用流程配置的 `default_sign_in_method`（EORI 是 `Government Gateway`） |
+| image4 | HMRC 登录方式（Government Gateway／One Login／Create new sign in details） | `HMRC_SIGN_IN_METHOD`，缺省用流程配置的 `default_sign_in_method`（EORI 默认新建账号） |
 | image5 | Government Gateway 短信验证码 | 人工在网页输入 |
 | image3 | `/register/vat-group`：Is your organisation part of a VAT group in the UK? | `No` |
 | image6 | `/register/matching/what-is-your-email`：What email address can we use for customs notifications? | `doc:vat_contact_email` 或 `env:HMRC_EMAIL` |
@@ -90,9 +90,18 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
 需要的登录环境变量与 VAT 流程相同：`HMRC_USER_ID`、`HMRC_PASSWORD`、
 `HMRC_EMAIL`、`HMRC_MFA_PHONE`。登录方式优先级是：网页/环境变量给的
 `HMRC_SIGN_IN_METHOD` > 流程配置的 `default_sign_in_method` >
-`Create new sign in details`。EORI 流程默认 `Government Gateway`（客户 VAT 注册时
-已经建过账号），所以要用**已有账号登录**时填 Gateway User ID 和密码即可，不需要
-再走一遍建号；`HMRC_MFA_PHONE_COUNTRY` 缺省取资料里的 `country`。
+`Create new sign in details`。
+
+两种登录方式的选择依据是**客户有没有现成的 Government Gateway 账号**：
+
+| 情况 | 登录方式 | 需要提供 | 会发生什么 |
+| --- | --- | --- | --- |
+| 新客户，没有 GG 账号 | `Create new sign in details`（默认） | 登录邮箱、手机号、密码（+ 姓名） | 程序在申请过程中建号：邮箱验证码 → 姓名 → 密码 → 生成 User ID → MFA 短信验证码 |
+| 客户已有 GG 账号（例如我们自己帮客户做过 VAT 注册并留下 User ID/密码） | `Government Gateway` | Gateway User ID、密码，手机号用于 MFA | 直接登录，不会再走建号和邮箱验证 |
+
+所以没有账号时选 Government Gateway 是走不通的：HMRC 会提示 User ID/密码不正确，
+程序会停在认证页并保存 `auth-validation-error` 截图。
+`HMRC_MFA_PHONE_COUNTRY` 缺省取资料里的 `country`。
 
 ## 5. 安全边界
 

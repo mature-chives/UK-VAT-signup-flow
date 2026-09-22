@@ -166,8 +166,10 @@ def build_eori_flow_config() -> dict[str, object]:
     return {
         "flow_name": "英国 EORI 注册",
         "start_url": EORI_START_URL,
-        # 客户 VAT 注册时已经建过 Government Gateway 账号，EORI 默认用已有账号登录。
-        "default_sign_in_method": "Government Gateway",
+        # 新客户没有 Government Gateway 账号，只能边申请边建号；
+        # 客户已有账号（例如我们做过 VAT 注册并留下 User ID/密码）时，
+        # 在网页上把登录方式改成 Government Gateway 即可。
+        "default_sign_in_method": "Create new sign in details",
         "profile_dir": ".browser-profile-eori",
         "artifacts_dir": "artifacts-eori",
         "browser_channel": "chrome",

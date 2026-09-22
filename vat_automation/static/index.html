@@ -126,7 +126,8 @@
         <label for="config">配置文件（由服务端启动参数固定）</label><input id="config" readonly>
         <label for="method">登录方式</label>
         <select id="method"><option>Create new sign in details</option><option>Government Gateway</option></select>
-        <label for="user-id">Gateway User ID（仅已有账号）</label><input id="user-id" autocomplete="off">
+        <div class="hint" id="method-hint">新客户选 <b>Create new sign in details</b>：程序会自动建 Government Gateway 账号（需要邮箱、手机、密码）。客户已有账号才选 <b>Government Gateway</b>：需要 Gateway User ID 和密码。</div>
+        <label for="user-id">Gateway User ID（已有账号才填）</label><input id="user-id" autocomplete="off">
         <label><input id="fresh" type="checkbox" checked style="width:auto"> 每次使用全新浏览器会话</label>
       </details>
 
@@ -446,8 +447,13 @@ $('start-form').addEventListener('submit', async event => {
   if (!extractionConfirmed) { setMessage('form-error', '请先检查提取结果并点击“确认资料无误”。', 'error'); return; }
   if (!extractedValues.full_name) { setMessage('form-error', '资料中缺少负责人姓名，请先解析文档或在提取结果中补充。', 'error'); return; }
   if (identityCount < identityRequired) { setMessage('form-error', `请先保存 ${identityRequired} 份身份证明文件。`, 'error'); return; }
-  if (!credentialsRemembered && (!$('email').value || !$('password').value)) {
-    setMessage('form-error', '请先填写 HMRC 登录邮箱和密码（已记住登录信息时可以不填）。', 'error'); return;
+  const method = $('method').value;
+  if (!credentialsRemembered && method === 'Government Gateway') {
+    if (!$('user-id').value || !$('password').value) {
+      setMessage('form-error', 'Government Gateway 登录要填 Gateway User ID 和密码；客户还没有账号请把登录方式改成“Create new sign in details”。', 'error'); return;
+    }
+  } else if (!credentialsRemembered && (!$('email').value || !$('password').value)) {
+    setMessage('form-error', '新建 Government Gateway 账号要填登录邮箱和密码（手机号用于收短信验证码）。', 'error'); return;
   }
   const credentials = {
     HMRC_SIGN_IN_METHOD:$('method').value, HMRC_EMAIL:$('email').value,

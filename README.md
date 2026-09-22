@@ -175,7 +175,7 @@ vat-register --config vat-config.eori.test.json
 | 英国 VAT 注册 | `uk-vat-register` | `--uk-vat-config`（默认 `vat-config.flow.json`），需要 3 份身份证明 |
 | 英国 EORI 注册 | `uk-eori-register` | `--uk-eori-config`（默认 `vat-config.eori.flow.json`），不需要身份证明 |
 
-登录方式优先级：网页/环境变量 `HMRC_SIGN_IN_METHOD` > 流程配置的 `default_sign_in_method` > `Create new sign in details`。EORI 配置默认 `Government Gateway`，用已有账号登录时在网页上填 Gateway User ID + 密码（工作台在自动化操作区也有这两个输入框）。
+登录方式优先级：网页/环境变量 `HMRC_SIGN_IN_METHOD` > 流程配置的 `default_sign_in_method` > `Create new sign in details`。默认都是新建账号（程序自动建 Government Gateway，需要邮箱、手机、密码）；**只有客户已有 Government Gateway 账号时**才在网页上把登录方式改成 `Government Gateway`，并填 Gateway User ID + 密码（工作台在自动化操作区也有该输入框）。
 
 ```bash
 .venv/bin/vat-bench --uk-vat-config vat-config.flow.json \
