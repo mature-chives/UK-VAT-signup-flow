@@ -165,18 +165,23 @@ class JobManager:
         self._lock = threading.Lock()
         self._sessions: dict[str, UserSession] = {}
         self._busy_with: str | None = None
-        # 身份证明数量由流程配置决定（VAT 三份；EORI 等不需要上传的流程为 0）。
-        self.identity_documents_required = self._identity_requirement()
+        # 流程名和身份证明数量都由流程配置决定（VAT 三份；EORI 不需要上传，为 0）。
+        self.flow_name = ""
+        self.identity_documents_required = DEFAULT_IDENTITY_DOCUMENTS
+        self._refresh_config()
         self._upload_root = Path(tempfile.mkdtemp(prefix="uk-vat-private-uploads-"))
         self._upload_root.chmod(0o700)
         atexit.register(shutil.rmtree, self._upload_root, True)
 
-    def _identity_requirement(self) -> int:
+    def _refresh_config(self) -> None:
+        """把配置里的流程名、身份证明数量读进来，供界面显示和启动校验。"""
         try:
-            return load_settings(self.config_path).identity_documents_required
+            settings = load_settings(self.config_path)
         except (OSError, ValueError):
-            # 配置尚未就绪或不可解析时按 VAT 的默认值处理，真正启动时会再报错。
-            return DEFAULT_IDENTITY_DOCUMENTS
+            # 配置尚未就绪或不可解析时保持默认值，真正启动时会再报错。
+            return
+        self.flow_name = settings.flow_name
+        self.identity_documents_required = settings.identity_documents_required
 
     def session(self, username: str) -> UserSession:
         name = normalize_username(username)
@@ -204,6 +209,7 @@ class JobManager:
                 "events": list(session.state["events"]),
                 "identity_documents": len(session.identity_documents),
                 "identity_required": self.identity_documents_required,
+                "flow_name": self.flow_name,
                 "final_review": {
                     "available": bool(session.final_review),
                     "pdf": bool(session.final_review.get("pdf")),
@@ -221,7 +227,7 @@ class JobManager:
         session = self.session(username)
         if not self.config_path.is_file():
             raise ValueError(f"服务端配置文件不存在：{self.config_path}")
-        self.identity_documents_required = self._identity_requirement()
+        self._refresh_config()
         if request.fresh_session and request.resume:
             raise ValueError("全新会话不能同时启用断点恢复。")
         if not request.extracted_confirmed:

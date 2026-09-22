@@ -310,7 +310,9 @@ class IdentityDocumentsRequirementTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             path = self._write(workspace, build_eori_flow_config())
             manager = JobManager(path)
-            self.assertEqual(manager.snapshot("alice")["identity_required"], 0)
+            snapshot = manager.snapshot("alice")
+            self.assertEqual(snapshot["identity_required"], 0)
+            self.assertEqual(snapshot["flow_name"], "英国 EORI 注册")
             with manager._lock:
                 manager._busy_with = "bob"
             # 身份证明检查应被跳过，因此这里报的是“别人正在跑”，不是缺身份证明。

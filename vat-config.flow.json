@@ -1,4 +1,5 @@
 {
+  "flow_name": "英国 VAT 注册",
   "start_url": "https://www.gov.uk/log-in-register-hmrc-online-services",
   "profile_dir": ".browser-profile",
   "artifacts_dir": "artifacts",

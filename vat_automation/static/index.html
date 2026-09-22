@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>UK VAT 注册助手</title>
+  <title>GOV.UK 注册助手</title>
   <style>
     :root { color-scheme:light; --ink:#18212b; --muted:#66717d; --blue:#1d70b8; --green:#00703c; --red:#d4351c; --bg:#f3f5f7; --line:#d6dbe0; }
     * { box-sizing:border-box; }
@@ -79,15 +79,16 @@
   </style>
 </head>
 <body>
-<header><div><strong>GOV.UK VAT 注册助手 · 局域网私有版</strong><span><span id="who" class="who"></span> <button id="logout" type="button">退出</button></span></div></header>
+<header><div><strong id="brand">GOV.UK 注册助手 · 局域网私有版</strong><span><span id="who" class="who"></span> <button id="logout" type="button">退出</button></span></div></header>
 <main>
   <section class="card">
     <h1>准备注册资料</h1>
+    <p class="hint" id="flow-banner"></p>
     <div class="notice local">资料文档只在服务器本机解析，不调用外部 AI 或云端 API。身份证明按账号隔离保存在权限 0700 的私有临时目录，程序退出时删除。</div>
     <div id="busy"></div>
 
     <div>
-      <h2>1. 解析 VAT 资料文档</h2>
+      <h2>1. 解析客户资料文档</h2>
       <input id="source-document" type="file" accept=".pdf,.docx,.xlsx,.txt,.json,.csv,.tsv">
       <div class="hint">支持 PDF、DOCX、XLSX、TXT、JSON、CSV、TSV，最大 12MB。建议使用“字段名: 值”格式。</div>
       <button id="parse-document" class="secondary" type="button">解析文档</button>
@@ -107,7 +108,7 @@
         </div>
         <label for="password">HMRC 登录密码</label>
         <input id="password" type="password" autocomplete="new-password" required>
-        <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进 VAT 申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
+        <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
       </div>
 
       <div class="section" id="identity-section">
@@ -702,6 +703,21 @@ function showReview(info) {
   renderRemoteEdit(info.edit);
 }
 
+let flowSignature = '';
+function showFlow(flowName, configName) {
+  // 同一个服务端配置只渲染一次，避免每秒刷新时反复改写标题。
+  const signature = `${flowName}|${configName}`;
+  if (signature === flowSignature) return;
+  flowSignature = signature;
+  $('brand').textContent = flowName
+    ? `${flowName} · 局域网私有版`
+    : 'GOV.UK 注册助手 · 局域网私有版';
+  document.title = flowName ? `${flowName} · 注册助手` : 'GOV.UK 注册助手';
+  $('flow-banner').textContent = configName
+    ? `当前流程：${flowName || '配置里未声明 flow_name'}　配置文件：${configName}`
+    : '';
+}
+
 async function refresh() {
   try {
     const response = await fetch('/api/status');
@@ -720,6 +736,7 @@ async function refresh() {
     $('pause').disabled = state.status !== 'running';
     $('continue').disabled = state.status !== 'paused';
     identityCount = state.identity_documents || identityCount;
+    showFlow(state.flow_name || '', state.config || '');
     const required = Number(state.identity_required ?? 3);
     if (required !== identityRequired) {
       identityRequired = required;

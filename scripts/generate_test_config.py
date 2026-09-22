@@ -22,6 +22,7 @@ def build_config(*, headless: bool) -> dict[str, object]:
     suffix = token()
     birth_date = date.today() - timedelta(days=365 * 32 + 37)
     return {
+        "flow_name": "英国 VAT 注册",
         "start_url": "https://www.gov.uk/log-in-register-hmrc-online-services",
         "profile_dir": ".browser-profile-test",
         "artifacts_dir": "artifacts-test",

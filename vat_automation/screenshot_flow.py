@@ -228,6 +228,7 @@ def screenshot_page_rules(
 
 def build_flow_config() -> dict[str, object]:
     return {
+        "flow_name": "英国 VAT 注册",
         "start_url": "https://www.gov.uk/log-in-register-hmrc-online-services",
         "profile_dir": ".browser-profile",
         "artifacts_dir": "artifacts",

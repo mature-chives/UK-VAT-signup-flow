@@ -153,6 +153,7 @@ def eori_page_rules() -> list[dict[str, object]]:
 def build_eori_flow_config() -> dict[str, object]:
     """EORI 流程配置：Web/工作台运行时直接读这份配置，不含客户真值。"""
     return {
+        "flow_name": "英国 EORI 注册",
         "start_url": EORI_START_URL,
         "profile_dir": ".browser-profile-eori",
         "artifacts_dir": "artifacts-eori",

@@ -343,6 +343,8 @@ class Settings:
     artifacts_dir: Path
     answers: dict[str, Any]
     pages: list[PageRule]
+    # 页面顶部显示的业务名称，例如「英国 VAT 注册」「英国 EORI 注册」。
+    flow_name: str = ""
     browser_channel: str = "chrome"
     headless: bool = False
     allow_live_application: bool = False
@@ -518,6 +520,7 @@ def load_settings(path: Path) -> Settings:
         artifacts_dir=local_path(raw.get("artifacts_dir", "artifacts")),
         answers=global_answers,
         pages=pages,
+        flow_name=str(raw.get("flow_name", "")).strip(),
         browser_channel=str(raw.get("browser_channel", "chrome")),
         headless=bool(raw.get("headless", False)),
         allow_live_application=bool(raw.get("allow_live_application", False)),
