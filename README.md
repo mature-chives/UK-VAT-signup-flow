@@ -137,6 +137,31 @@ vat-register --config vat-config.test.json
 
 首次开户时，程序会自动选择 `Create new sign in details`、回答主体问题、填写邮箱、姓名和密码，并选择验证方式；邮箱验证码和手机验证码到达后，在终端提示处输入即可继续。已有账号登录时，可将 `HMRC_SIGN_IN_METHOD` 改为 `Government Gateway`，并额外提供 `HMRC_USER_ID`。凭据和验证码不会写入审计日志。
 
+## 英国 EORI 注册流程
+
+EORI 注册是与 VAT 分开的一套流程（`vat_automation/eori_flow.py`）：同样由本机 Chrome 驱动
+HMRC 的 `customs-registration-services/eori-only` 服务，入口是
+`https://www.gov.uk/eori/apply-for-eori`，页面更少、不需要上传身份证明，地址栏只有两行街道地址。
+客户真值一律走 `doc:`／`env:` 占位符，流程表为 `vat-config.eori.flow.json`。
+
+```bash
+# 改动流程定义后重新生成配置
+.venv/bin/python scripts/generate_eori_config.py
+
+# 单用户 Web UI（资料袋解析 + 验证码 + 最终核对）
+.venv/bin/vat-web --config vat-config.eori.flow.json
+
+# 纯虚构资料的本地冒烟配置，进入 EORI 数据区前会停止
+.venv/bin/python scripts/generate_eori_config.py --test
+vat-register --config vat-config.eori.test.json
+
+# 离线冒烟：本地模拟页面走通整条流程，不访问 HMRC
+.venv/bin/python scripts/eori_smoke.py
+```
+
+流程页面清单、资料袋字段和安全边界见 [EORI 注册流程说明](docs/eori-registration-flow.md)。
+工作台（`vat-bench`）目前只登记了 VAT 插件，EORI 请先用 `vat-web` 或命令行运行。
+
 ## 销售交付工作台
 
 业务菜单由插件登记，不写死种类。新增一种业务=增加一个插件模块并 `register()`。销售与交付暂用同一套菜单；客户资料可在多个任务间勾选复用。英国 VAT 的 Chrome 仍在服务器本机运行，同事只看状态和验证码。
@@ -224,6 +249,8 @@ python -m compileall -q vat_automation tests
 python -m unittest discover -s tests -v
 python scripts/check_flow_coverage.py vat-config.flow.json
 python scripts/check_flow_coverage.py vat-config.test.json
+python scripts/check_flow_coverage.py --flow eori
 ```
 
 覆盖检查基于截图整理出的 84 个逻辑页面；“covered”表示已有专用规则、通用字段映射或特殊页面处理，不代表每个分支都已在真实 HMRC 环境提交验证。
+EORI 流程同理：`--flow eori` 检查 `materials/` 里的 17 个 EORI 截图页面（10 个路径页 + 7 个标题页）都有规则映射。

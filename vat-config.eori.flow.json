@@ -1,0 +1,172 @@
+{
+  "start_url": "https://www.gov.uk/eori/apply-for-eori",
+  "profile_dir": ".browser-profile-eori",
+  "artifacts_dir": "artifacts-eori",
+  "browser_channel": "chrome",
+  "headless": false,
+  "allow_live_application": true,
+  "identity_documents_required": 0,
+  "max_steps": 80,
+  "answers": {
+    "Country": "doc:country|env:HMRC_MFA_PHONE_COUNTRY",
+    "Business name": "doc:business_name",
+    "Full name": "doc:full_name",
+    "Telephone": "doc:phone"
+  },
+  "pages": [
+    {
+      "match": {
+        "heading_contains": "What email address can we use for customs notifications"
+      },
+      "answers": {
+        "What email address can we use for customs notifications?": "doc:vat_contact_email|env:HMRC_EMAIL",
+        "Email address": "doc:vat_contact_email|env:HMRC_EMAIL",
+        "email-address": "doc:vat_contact_email|env:HMRC_EMAIL"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "heading_contains": "the mail address you want to use"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "Yes"
+    },
+    {
+      "match": {
+        "heading_contains": "part of a VAT group"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "No"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/matching/user-location"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "Rest of the world"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/matching/organisation-type"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "Organisation"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/matching/name/third-country-organisation"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "doc:business_name"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/matching/utr/third-country-organisation"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "No"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/matching/address/third-country-organisation"
+      },
+      "answers": {},
+      "action": "continue",
+      "address": "doc:business",
+      "address_format": "eori"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/date-established"
+      },
+      "answers": {
+        "Day": "doc:company-incorporation-date.day",
+        "Month": "doc:company-incorporation-date.month",
+        "Year": "doc:company-incorporation-date.year",
+        "date-established.day": "doc:company-incorporation-date.day",
+        "date-established.month": "doc:company-incorporation-date.month",
+        "date-established.year": "doc:company-incorporation-date.year"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/sic-code"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "47910"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/disclose-personal-details-consent"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "No"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/vat-registered-uk"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "Yes"
+    },
+    {
+      "match": {
+        "heading_contains": "Your UK VAT details"
+      },
+      "answers": {
+        "What is your VAT registration number?": "doc:vat_number",
+        "VAT registration number": "doc:vat_number",
+        "vatNumber": "doc:vat_number",
+        "vat-number": "doc:vat_number",
+        "What is the postcode where your organisation is registered for VAT?": "doc:postcode|doc:business_postcode",
+        "Postcode of your VAT registration address": "doc:postcode|doc:business_postcode",
+        "vat-postcode": "doc:postcode|doc:business_postcode"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "heading_contains": "When did you become VAT registered"
+      },
+      "answers": {
+        "Day": "doc:vat-registration-date.day",
+        "Month": "doc:vat-registration-date.month",
+        "Year": "doc:vat-registration-date.year",
+        "vat-registered-date.day": "doc:vat-registration-date.day",
+        "vat-registered-date.month": "doc:vat-registration-date.month",
+        "vat-registered-date.year": "doc:vat-registration-date.year"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "heading_contains": "EORI number application contact details"
+      },
+      "answers": {
+        "Telephone": "doc:phone",
+        "Telephone number": "doc:phone",
+        "telephone": "doc:phone"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "heading_contains": "Do you want us to use this address to send you information"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "Yes"
+    }
+  ]
+}

@@ -27,6 +27,12 @@ FINAL_MARKERS = (
     "submit application",
     "send your application",
 )
+# 最终核对页的提交按钮文案：HMRC 各服务不完全一致，按顺序尝试第一个可见的。
+FINAL_SUBMIT_ACTIONS = (
+    "Confirm and submit",
+    "Accept and submit",
+    "Submit",
+)
 
 
 def is_skip_edit_action(action: str) -> bool:
@@ -840,13 +846,18 @@ class VatAutomation:
             )
 
         await self._audit("final-review-confirmed", url=page.url)
-        action = "Confirm and submit"
-        if not await self._click_named_action(page, action):
+        action = ""
+        for candidate in FINAL_SUBMIT_ACTIONS:
+            if await self._click_named_action(page, candidate):
+                action = candidate
+                break
+        if not action:
             await self._snapshot(
                 page, heading, reason="missing-confirm-and-submit"
             )
             raise AutomationStopped(
-                f"人工已确认，但最终复核页找不到按钮：{action}"
+                "人工已确认，但最终复核页找不到提交按钮："
+                + "、".join(FINAL_SUBMIT_ACTIONS)
             )
         await self._verify_final_submission(page, heading, action)
 
@@ -1271,7 +1282,7 @@ class VatAutomation:
                 reason="final-submit-not-completed",
             )
             raise AutomationStopped(
-                "已点击 Confirm and submit，但页面仍停留在最终复核页，"
+                f"已点击 {action}，但页面仍停留在最终复核页，"
                 "申请可能尚未提交，请人工检查。"
             )
         await self._audit(
@@ -1319,6 +1330,7 @@ class VatAutomation:
 
     @staticmethod
     def _is_application_page(url: str) -> bool:
+        """真实申请数据区：这些路径会写入客户真实资料，测试配置必须挡在前面。"""
         path = urlparse(url).path.casefold()
         return any(
             marker in path
@@ -1328,6 +1340,7 @@ class VatAutomation:
                 "/identify-your-overseas-business/",
                 "/identify-your-sole-trader-business/",
                 "/sic-search/",
+                "/customs-registration-services/eori-only/",
             )
         )
 
@@ -1343,6 +1356,7 @@ class VatAutomation:
             for marker in (
                 "/register-for-vat/check-your-answers",
                 "/register-for-vat/check-confirm-answers",
+                "/customs-registration-services/eori-only/register/review-details",
             )
         ):
             return True

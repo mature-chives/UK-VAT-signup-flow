@@ -32,6 +32,7 @@ from .auth import (
     normalize_username,
 )
 from .config import (
+    DEFAULT_IDENTITY_DOCUMENTS,
     Settings,
     load_settings,
 )
@@ -164,9 +165,18 @@ class JobManager:
         self._lock = threading.Lock()
         self._sessions: dict[str, UserSession] = {}
         self._busy_with: str | None = None
+        # 身份证明数量由流程配置决定（VAT 三份；EORI 等不需要上传的流程为 0）。
+        self.identity_documents_required = self._identity_requirement()
         self._upload_root = Path(tempfile.mkdtemp(prefix="uk-vat-private-uploads-"))
         self._upload_root.chmod(0o700)
         atexit.register(shutil.rmtree, self._upload_root, True)
+
+    def _identity_requirement(self) -> int:
+        try:
+            return load_settings(self.config_path).identity_documents_required
+        except (OSError, ValueError):
+            # 配置尚未就绪或不可解析时按 VAT 的默认值处理，真正启动时会再报错。
+            return DEFAULT_IDENTITY_DOCUMENTS
 
     def session(self, username: str) -> UserSession:
         name = normalize_username(username)
@@ -193,6 +203,7 @@ class JobManager:
                 **session.state,
                 "events": list(session.state["events"]),
                 "identity_documents": len(session.identity_documents),
+                "identity_required": self.identity_documents_required,
                 "final_review": {
                     "available": bool(session.final_review),
                     "pdf": bool(session.final_review.get("pdf")),
@@ -210,12 +221,18 @@ class JobManager:
         session = self.session(username)
         if not self.config_path.is_file():
             raise ValueError(f"服务端配置文件不存在：{self.config_path}")
+        self.identity_documents_required = self._identity_requirement()
         if request.fresh_session and request.resume:
             raise ValueError("全新会话不能同时启用断点恢复。")
         if not request.extracted_confirmed:
             raise ValueError("请先在网页中检查并确认文档提取结果。")
-        if len(session.identity_documents) != 3:
-            raise ValueError("请先保存正好三份身份证明文件。")
+        if (
+            self.identity_documents_required
+            and len(session.identity_documents) != self.identity_documents_required
+        ):
+            raise ValueError(
+                f"请先保存正好 {self.identity_documents_required} 份身份证明文件。"
+            )
 
         credentials = {
             key: value.strip()
@@ -306,7 +323,7 @@ class JobManager:
                 raise RuntimeError("当前任务未处于待人工核对状态。")
             session.review_action = "submit"
             session.state["message"] = (
-                "已收到人工提交确认，正在点击 HMRC 的 Confirm and submit"
+                "已收到人工提交确认，正在点击 HMRC 的提交按钮"
             )
             session.review_event.set()
 

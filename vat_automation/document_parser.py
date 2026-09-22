@@ -89,6 +89,20 @@ FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
     "business_postcode": ("公司注册地址邮编", ("公司注册地址邮编",)),
     "business_type": ("营业类型", ("营业类型（贸易/物流/金融/数字货币交易/IT/咨询/旅游/建筑/房产/餐饮/法律 等）",)),
     "is_small_business": ("是否小微企业", ("公司是否属于小微企业",)),
+    "vat_number": (
+        "英国VAT号",
+        (
+            "vat number", "vat registration number", "uk vat number",
+            "英国VAT号", "VAT注册号", "VAT号码", "增值税号",
+        ),
+    ),
+    "vat_registration_date": (
+        "英国VAT注册生效日期",
+        (
+            "vat registration date", "date of vat registration",
+            "vat effective date", "VAT注册日期", "VAT生效日期", "VAT注册生效日期",
+        ),
+    ),
     "vat_contact_email": ("VAT沟通邮箱", ("注册VAT的沟通邮箱",)),
     "business_phone": ("生意联系电话", ("生意联系电话",)),
     "sales_platform": ("销售平台", ("销售平台（例如Amazon、Ebay等）",)),
@@ -110,6 +124,11 @@ ANSWER_MAPPING = {
 }
 ADDRESS_KEYS = {"premises", "street", "locality", "city", "region", "postcode", "country"}
 SUPPORTED_SUFFIXES = {".pdf", ".docx", ".xlsx", ".txt", ".json", ".csv", ".tsv"}
+# 资料袋里的日期字段 → HMRC 页面上的 day/month/year 字段前缀。
+DOCUMENT_DATE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("company_incorporation_date", "company-incorporation-date"),
+    ("vat_registration_date", "vat-registration-date"),
+)
 VAT_REGISTRATION_FIELD_KEYS = (
     "project_code", "application_reference",
     "full_name", "first_name", "last_name", "birth_date",
@@ -122,6 +141,7 @@ VAT_REGISTRATION_FIELD_KEYS = (
     "premises", "street", "locality", "city", "region", "postcode",
     "country",
     "vat_contact_email", "business_phone", "business_description",
+    "vat_number", "vat_registration_date",
 )
 
 
@@ -193,6 +213,8 @@ def prepare_document_values(values: Mapping[str, str]) -> dict[str, str]:
         if str(value).strip()
     }
     bag.update(extracted_birth_date(bag))
+    for source, prefix in DOCUMENT_DATE_FIELDS:
+        bag.update(extracted_date_parts(bag.get(source, ""), prefix))
     # HMRC 的海外税号就是公司注册号（中国统一社会信用代码）。
     identifier = bag.get("company_registration_number") or ""
     if identifier:
@@ -201,24 +223,40 @@ def prepare_document_values(values: Mapping[str, str]) -> dict[str, str]:
     return bag
 
 
-def extracted_birth_date(values: dict[str, str]) -> dict[str, str]:
-    raw = values.get("birth_date", "").strip()
+def extracted_birth_date(values: Mapping[str, str]) -> dict[str, str]:
+    """出生日期按 HMRC 登录页面用的字段名展开（含裸 Day/Month/Year）。"""
+    raw = (values.get("birth_date") or "").strip()
+    if not raw:
+        return {}
+    parts = extracted_date_parts(raw, "date-of-birth")
+    parts.update(
+        {
+            "Day": parts["date-of-birth.day"],
+            "Month": parts["date-of-birth.month"],
+            "Year": parts["date-of-birth.year"],
+        }
+    )
+    return parts
+
+
+def extracted_date_parts(raw: str, prefix: str) -> dict[str, str]:
+    """把日期字符串拆成 <prefix>.day/.month/.year，供页面按字段名取值。"""
+    raw = (raw or "").strip()
     if not raw:
         return {}
     for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
         try:
             parsed = datetime.strptime(raw, pattern).date()
             return {
-                "date-of-birth.day": str(parsed.day),
-                "date-of-birth.month": str(parsed.month),
-                "date-of-birth.year": str(parsed.year),
-                "Day": str(parsed.day),
-                "Month": str(parsed.month),
-                "Year": str(parsed.year),
+                f"{prefix}.day": str(parsed.day),
+                f"{prefix}.month": str(parsed.month),
+                f"{prefix}.year": str(parsed.year),
             }
         except ValueError:
             continue
-    raise ValueError("出生日期格式应为 YYYY-MM-DD、DD/MM/YYYY 或 DD-MM-YYYY。")
+    raise ValueError(
+        f"{prefix} 日期格式应为 YYYY-MM-DD、DD/MM/YYYY 或 DD-MM-YYYY：{raw}"
+    )
 
 
 def _extract_text(suffix: str, content: bytes) -> str:

@@ -110,10 +110,10 @@
         <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进 VAT 申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
       </div>
 
-      <div class="section">
-        <h2>3. 三份身份证明</h2>
+      <div class="section" id="identity-section">
+        <h2 id="identity-title">3. 三份身份证明</h2>
         <input id="identity-files" type="file" multiple accept=".jpg,.jpeg,.bmp,.png,.pdf,.doc,.docx,.xls,.xlsx,.gif,.txt">
-        <div class="hint">必须一次选择正好 3 份，每份最大 25MB。文件仅供后续 HMRC 页面自动上传。</div>
+        <div class="hint" id="identity-hint">必须一次选择正好 3 份，每份最大 25MB。文件仅供后续 HMRC 页面自动上传。</div>
         <button id="save-identity" class="secondary" type="button">保存到服务器私有临时区</button>
         <div id="identity-message" class="message"></div>
       </div>
@@ -127,13 +127,13 @@
         <label><input id="fresh" type="checkbox" checked style="width:auto"> 每次使用全新浏览器会话</label>
       </details>
 
-      <button id="start" type="submit">开始 VAT 注册</button>
+      <button id="start" type="submit">开始自动化注册</button>
       <div id="form-error" class="message error"></div>
     </form>
 
     <div id="review" class="section">
       <h2>最终核对</h2>
-      <div class="notice">请逐项核对下方与 HMRC 核对页一致的内容。确认操作不可撤销：确认后程序会点击 HMRC 的“Confirm and submit”，正式提交 VAT 注册申请。</div>
+      <div class="notice">请逐项核对下方与 HMRC 核对页一致的内容。确认操作不可撤销：确认后程序会点击 HMRC 的提交按钮，正式提交申请。</div>
       <a id="review-download" class="review-download" href="/api/final-review/pdf" download>存档：下载完整 PDF</a>
       <div id="review-changes"></div>
       <div id="remote-edit" style="display:none">
@@ -190,6 +190,7 @@ const csrf = () => (document.cookie.match(/(?:^|;\s*)vat_csrf=([^;]*)/) || ['', 
 let extractedValues = {};
 let extractedLabels = {};
 let identityCount = 0;
+let identityRequired = 3;
 let extractionConfirmed = false;
 let currentStatus = 'idle';
 let reviewChangesSignature = '';
@@ -439,7 +440,7 @@ $('start-form').addEventListener('submit', async event => {
   event.preventDefault(); setMessage('form-error', ''); syncExtractedValues();
   if (!extractionConfirmed) { setMessage('form-error', '请先检查提取结果并点击“确认资料无误”。', 'error'); return; }
   if (!extractedValues.full_name) { setMessage('form-error', '资料中缺少负责人姓名，请先解析文档或在提取结果中补充。', 'error'); return; }
-  if (identityCount !== 3) { setMessage('form-error', '请先保存正好三份身份证明文件。', 'error'); return; }
+  if (identityCount < identityRequired) { setMessage('form-error', `请先保存 ${identityRequired} 份身份证明文件。`, 'error'); return; }
   const credentials = {
     HMRC_SIGN_IN_METHOD:$('method').value, HMRC_EMAIL:$('email').value,
     HMRC_USER_ID:$('user-id').value, HMRC_PASSWORD:$('password').value,
@@ -493,7 +494,7 @@ $('review-confirm').addEventListener('click', async () => {
     setMessage('review-message', body.detail || '提交确认失败', 'error');
     $('review-confirm').disabled = false;
   } else {
-    setMessage('review-message', '确认已发送，程序正在点击 HMRC 的 Confirm and submit。', 'ok');
+    setMessage('review-message', '确认已发送，程序正在点击 HMRC 的提交按钮。', 'ok');
   }
 });
 
@@ -719,6 +720,13 @@ async function refresh() {
     $('pause').disabled = state.status !== 'running';
     $('continue').disabled = state.status !== 'paused';
     identityCount = state.identity_documents || identityCount;
+    const required = Number(state.identity_required ?? 3);
+    if (required !== identityRequired) {
+      identityRequired = required;
+      $('identity-section').style.display = required > 0 ? '' : 'none';
+      $('identity-title').textContent = `3. ${required} 份身份证明`;
+      $('identity-hint').textContent = `必须一次选择正好 ${required} 份，每份最大 25MB。文件仅供后续 HMRC 页面自动上传。`;
+    }
     showAdmin(state.admin);
     showReview(state.final_review);
     updateReviewButtons();

@@ -15,6 +15,10 @@ UK_NEXT_MONTH_FIRST_PREFIX = "date:uk-next-month-first."
 UK_NEXT_MONTH_VAT_STAGGER = "vat-return-stagger:uk-next-month-first"
 DOC_PREFIX = "doc:"
 ENV_PREFIX = "env:"
+ADDRESS_FORMAT_INTERNATIONAL = "international"
+ADDRESS_FORMAT_EORI = "eori"
+ADDRESS_FORMATS = (ADDRESS_FORMAT_INTERNATIONAL, ADDRESS_FORMAT_EORI)
+DEFAULT_IDENTITY_DOCUMENTS = 3
 LIVE_APPLICATION_TEST_MARKERS: tuple[tuple[str, str], ...] = (
     ("example.com", "检测到示例邮箱域名 example.com"),
     ("test-", "检测到 TEST- 测试标记"),
@@ -108,9 +112,11 @@ def is_placeholder_chain(value: Any) -> bool:
 
 
 def expand_document_address(
-    source: str, document_values: Mapping[str, str] | None
+    source: str,
+    document_values: Mapping[str, str] | None,
+    address_format: str = ADDRESS_FORMAT_INTERNATIONAL,
 ) -> dict[str, str]:
-    """把 doc:home / doc:business 展开为国际地址表单字段。"""
+    """把 doc:home / doc:business 展开成页面要求的地址表单字段。"""
     if not source.startswith(DOC_PREFIX) or not document_values:
         return {}
     kind = source.removeprefix(DOC_PREFIX).strip()
@@ -122,7 +128,7 @@ def expand_document_address(
         raw = extracted_address(dict(document_values))
     else:
         return {}
-    return build_international_address_answers(raw)
+    return build_address_answers(raw, address_format=address_format)
 
 
 def _clean_address_text(value: Any) -> str:
@@ -137,13 +143,20 @@ def _address_value(value: Any) -> str:
     return _clean_address_text(value)
 
 
-def build_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
+def build_address_answers(
+    address: Mapping[str, Any],
+    address_format: str = ADDRESS_FORMAT_INTERNATIONAL,
+) -> dict[str, str]:
     """将结构化地址配置转换为 HMRC 国际地址表的 5 行字段。
 
     与 doc:home / doc:business 共用同一套拆行逻辑，不缩写、不截断。
     """
     if not address:
         return {}
+    if address_format == ADDRESS_FORMAT_EORI:
+        return build_eori_address_answers(address)
+    if address_format != ADDRESS_FORMAT_INTERNATIONAL:
+        raise ValueError(f"不支持的地址格式：{address_format}")
     locality_parts = [
         _clean_address_text(address.get(key, ""))
         for key in ("locality", "city", "region")
@@ -158,6 +171,65 @@ def build_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
         "country": address.get("country", ""),
     }
     return build_international_address_answers(normalized)
+
+
+def build_eori_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
+    """将结构化地址放进 EORI 注册表单的地址栏。
+
+    EORI 表单只有两行街道地址，另有 Town or city、Region or state、
+    Postal code、Country。拆行规则与 HMRC 国际地址表一致：宁可报错也不截断。
+    """
+    if not address:
+        return {}
+    lines: list[str] = []
+    for key, alias, field in (
+        ("premises", "line1", "Address line 1"),
+        ("street", "line2", "Address line 2"),
+    ):
+        value = _address_value(address.get(key, address.get(alias, "")))
+        if value:
+            lines.extend(_split_full_address_component(value, field))
+    while len(lines) > 2:
+        merged = False
+        for index in range(len(lines) - 2, -1, -1):
+            candidate = f"{lines[index]}, {lines[index + 1]}"
+            if len(candidate) <= ADDRESS_MAX_LENGTH:
+                lines[index : index + 2] = [candidate]
+                merged = True
+                break
+        if not merged:
+            raise ValueError(
+                "EORI 地址只能填两行街道地址，无法在不截断的情况下放下："
+                + " | ".join(lines)
+            )
+
+    answers: dict[str, str] = {}
+    if lines:
+        answers["Address line 1"] = lines[0]
+    if len(lines) > 1:
+        answers["Address line 2 (optional)"] = lines[1]
+    locality = ", ".join(
+        dict.fromkeys(
+            part
+            for part in (
+                _clean_address_text(address.get("locality", "")),
+                _clean_address_text(address.get("city", "")),
+            )
+            if part
+        )
+    )
+    if locality:
+        answers["Town or city"] = locality
+    region = _clean_address_text(address.get("region", ""))
+    if region:
+        answers["Region or state (optional)"] = region
+    postcode = _clean_address_text(address.get("postcode", ""))
+    if postcode:
+        answers["Postal code (optional)"] = postcode
+    country = _clean_address_text(address.get("country", ""))
+    if country:
+        answers["Country"] = country
+    return answers
 
 
 def build_international_address_answers(address: Mapping[str, Any]) -> dict[str, str]:
@@ -252,6 +324,7 @@ class PageRule:
     default_answer: Any = field(default_factory=lambda: UNSET)
     action: str = "continue"
     address_source: str = ""
+    address_format: str = ADDRESS_FORMAT_INTERNATIONAL
 
     def matches(self, url: str, heading: str) -> bool:
         return (
@@ -274,6 +347,8 @@ class Settings:
     headless: bool = False
     allow_live_application: bool = False
     max_steps: int = 250
+    # VAT 流程要求三份身份证明；EORI 等不需要上传资料的流程可在配置里设为 0。
+    identity_documents_required: int = DEFAULT_IDENTITY_DOCUMENTS
 
     def answer_for(
         self,
@@ -299,7 +374,7 @@ class Settings:
         for page in reversed(matching_pages):
             if page.address_source:
                 expanded = expand_document_address(
-                    page.address_source, document_values
+                    page.address_source, document_values, page.address_format
                 )
                 if expanded:
                     answer_maps.append(expanded)
@@ -391,6 +466,11 @@ def load_settings(path: Path) -> Settings:
     pages: list[PageRule] = []
     for item in raw.get("pages", []):
         address = item.get("address", {})
+        address_format = str(
+            item.get("address_format", ADDRESS_FORMAT_INTERNATIONAL)
+        ).strip() or ADDRESS_FORMAT_INTERNATIONAL
+        if address_format not in ADDRESS_FORMATS:
+            raise ValueError(f"不支持的地址格式：{address_format}")
         address_source = ""
         if isinstance(address, str):
             address_source = address.strip()
@@ -398,7 +478,7 @@ def load_settings(path: Path) -> Settings:
                 raise ValueError(f"页面 address 必须是对象或 doc: 引用：{address}")
             page_answers = {}
         else:
-            page_answers = build_address_answers(address)
+            page_answers = build_address_answers(address, address_format)
         page_answers.update(resolve_answers(item.get("answers", {})))
         pages.append(
             PageRule(
@@ -410,6 +490,7 @@ def load_settings(path: Path) -> Settings:
                 ),
                 action=item.get("action", "continue"),
                 address_source=address_source,
+                address_format=address_format,
             )
         )
     # 这些是当前业务模型的固定规则，追加在最后以防止配置文件中的旧值覆盖。
@@ -421,7 +502,12 @@ def load_settings(path: Path) -> Settings:
                 action=action,
             )
         )
-    global_answers = build_address_answers(raw.get("address", {}))
+    global_address_format = str(
+        raw.get("address_format", ADDRESS_FORMAT_INTERNATIONAL)
+    ).strip() or ADDRESS_FORMAT_INTERNATIONAL
+    if global_address_format not in ADDRESS_FORMATS:
+        raise ValueError(f"不支持的地址格式：{global_address_format}")
+    global_answers = build_address_answers(raw.get("address", {}), global_address_format)
     global_answers.update(resolve_answers(raw.get("answers", {})))
     return Settings(
         start_url=raw.get(
@@ -436,4 +522,17 @@ def load_settings(path: Path) -> Settings:
         headless=bool(raw.get("headless", False)),
         allow_live_application=bool(raw.get("allow_live_application", False)),
         max_steps=int(raw.get("max_steps", 250)),
+        identity_documents_required=_identity_documents_required(raw),
     )
+
+
+def _identity_documents_required(raw: Mapping[str, Any]) -> int:
+    """身份证明数量：默认沿用 VAT 流程的三份，0 表示该流程不需要上传。"""
+    value = raw.get("identity_documents_required", DEFAULT_IDENTITY_DOCUMENTS)
+    try:
+        required = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"identity_documents_required 必须是整数：{value!r}") from exc
+    if required < 0:
+        raise ValueError(f"identity_documents_required 不能为负数：{required}")
+    return required
