@@ -162,6 +162,12 @@ class EoriFlowConfigTests(unittest.TestCase):
         )
         self.assertEqual(page["default_answer"], "47910")
 
+    def test_eori_defaults_to_government_gateway_login(self) -> None:
+        # 客户 VAT 注册时已经建过 Government Gateway 账号，EORI 默认用它登录已有账号。
+        config = build_eori_flow_config()
+        self.assertEqual(config["default_sign_in_method"], "Government Gateway")
+        raw = json.loads(FLOW_CONFIG.read_text(encoding="utf-8"))
+        self.assertEqual(raw["default_sign_in_method"], "Government Gateway")
     def test_every_screenshot_page_has_a_rule(self) -> None:
         config = build_eori_flow_config()
         paths = [

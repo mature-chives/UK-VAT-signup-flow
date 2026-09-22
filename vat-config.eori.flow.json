@@ -1,6 +1,7 @@
 {
   "flow_name": "英国 EORI 注册",
   "start_url": "https://www.gov.uk/eori/apply-for-eori",
+  "default_sign_in_method": "Government Gateway",
   "profile_dir": ".browser-profile-eori",
   "artifacts_dir": "artifacts-eori",
   "browser_channel": "chrome",

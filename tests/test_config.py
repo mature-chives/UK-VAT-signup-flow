@@ -1525,6 +1525,38 @@ class ConfigTests(unittest.TestCase):
         )
 
 
+class SignInMethodTests(unittest.TestCase):
+    """登录方式优先级：网页/环境变量 > 流程配置默认值 > 新建账号。"""
+
+    def _runner(self, default: str = "", **credentials: str) -> VatAutomation:
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={},
+            pages=[],
+            default_sign_in_method=default,
+        )
+        return VatAutomation(settings, interactive=False, credentials=dict(credentials))
+
+    def test_provided_method_wins_over_config_default(self) -> None:
+        runner = self._runner(
+            "Government Gateway", HMRC_SIGN_IN_METHOD="Create new sign in details"
+        )
+        self.assertEqual(runner._sign_in_method(), "Create new sign in details")
+
+    def test_config_default_is_used_when_not_provided(self) -> None:
+        self.assertEqual(
+            self._runner("Government Gateway")._sign_in_method(),
+            "Government Gateway",
+        )
+
+    def test_fallback_is_creating_a_new_account(self) -> None:
+        self.assertEqual(
+            self._runner()._sign_in_method(), "Create new sign in details"
+        )
+
+
 class BrowserErrorRecoveryTests(unittest.TestCase):
     """HMRC 偶发 ERR_CONNECTION_CLOSED 时应退回上一页重试，而不是直接停。"""
 

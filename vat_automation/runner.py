@@ -482,9 +482,7 @@ class VatAutomation:
                 "government gateway" in normalize(label) for label in available
             )
             if is_sign_in_choice:
-                method = self._credentials.get(
-                    "HMRC_SIGN_IN_METHOD", "Create new sign in details"
-                )
+                method = self._sign_in_method()
                 audit_event = "auth-method-selected"
             elif "tax agent" in heading_normalized:
                 method = self._credentials.get("HMRC_IS_TAX_AGENT", "No")
@@ -704,6 +702,14 @@ class VatAutomation:
                 if control.combobox:
                     await self._choose_autocomplete_option(page, str(value))
         return missing
+
+    def _sign_in_method(self) -> str:
+        """登录方式：网页/环境变量优先，其次流程配置的默认值，最后新建账号。"""
+        return (
+            self._credentials.get("HMRC_SIGN_IN_METHOD", "")
+            or self.settings.default_sign_in_method
+            or "Create new sign in details"
+        )
 
     def _resolve_value(self, value: Any) -> Any:
         if isinstance(value, str) and is_placeholder_chain(value):

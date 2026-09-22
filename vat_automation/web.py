@@ -173,6 +173,7 @@ class JobManager:
         self._busy_with: str | None = None
         # 流程名和身份证明数量都由流程配置决定（VAT 三份；EORI 不需要上传，为 0）。
         self.flow_name = ""
+        self.default_sign_in_method = ""
         self.identity_documents_required = DEFAULT_IDENTITY_DOCUMENTS
         self._refresh_config()
         self._upload_root = Path(tempfile.mkdtemp(prefix="uk-vat-private-uploads-"))
@@ -187,6 +188,7 @@ class JobManager:
             # 配置尚未就绪或不可解析时保持默认值，真正启动时会再报错。
             return
         self.flow_name = settings.flow_name
+        self.default_sign_in_method = settings.default_sign_in_method
         self.identity_documents_required = settings.identity_documents_required
 
     def session(self, username: str) -> UserSession:
@@ -217,6 +219,7 @@ class JobManager:
                 "identity_required": self.identity_documents_required,
                 "credentials_saved": bool(session.saved_credentials),
                 "flow_name": self.flow_name,
+                "sign_in_method": self.default_sign_in_method,
                 "final_review": {
                     "available": bool(session.final_review),
                     "pdf": bool(session.final_review.get("pdf")),

@@ -195,6 +195,7 @@ let extractedLabels = {};
 let identityCount = 0;
 let identityRequired = 3;
 let credentialsRemembered = false;
+let signInMethodPreset = false;
 let extractionConfirmed = false;
 let currentStatus = 'idle';
 let reviewChangesSignature = '';
@@ -759,6 +760,11 @@ async function refresh() {
       $('credential-hint').textContent = '已记住上次的 HMRC 登录信息（仅本机内存）：失败重试不用再输密码，重启服务即失效。';
     }
     showFlow(state.flow_name || '', state.config || '');
+    if (!signInMethodPreset && state.sign_in_method) {
+      // 按流程配置预选登录方式（EORI 默认用 Government Gateway 登录已有账号）。
+      $('method').value = state.sign_in_method;
+      signInMethodPreset = true;
+    }
     const required = Number(state.identity_required ?? 3);
     if (required !== identityRequired) {
       identityRequired = required;

@@ -345,6 +345,8 @@ class Settings:
     pages: list[PageRule]
     # 页面顶部显示的业务名称，例如「英国 VAT 注册」「英国 EORI 注册」。
     flow_name: str = ""
+    # 默认登录方式：Government Gateway（已有账号）或 Create new sign in details。
+    default_sign_in_method: str = ""
     browser_channel: str = "chrome"
     headless: bool = False
     allow_live_application: bool = False
@@ -521,6 +523,7 @@ def load_settings(path: Path) -> Settings:
         answers=global_answers,
         pages=pages,
         flow_name=str(raw.get("flow_name", "")).strip(),
+        default_sign_in_method=str(raw.get("default_sign_in_method", "")).strip(),
         browser_channel=str(raw.get("browser_channel", "chrome")),
         headless=bool(raw.get("headless", False)),
         allow_live_application=bool(raw.get("allow_live_application", False)),
