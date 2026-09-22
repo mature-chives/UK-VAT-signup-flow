@@ -14,9 +14,9 @@ HMRC 的 EORI 服务与 VAT 服务同一个域名（`tax.service.gov.uk`），�
 | image1、image2 | GOV.UK「Get an EORI number」「Apply for an EORI number」指南页 | `start_url` 入口，点 `Start now` |
 | image4 | HMRC 登录方式（Government Gateway／One Login／Create new sign in details） | `HMRC_SIGN_IN_METHOD` |
 | image5 | Government Gateway 短信验证码 | 人工在网页输入 |
-| image3 | Is your organisation part of a VAT group in the UK? | `No` |
-| image6 | What email address can we use for customs notifications? | `doc:vat_contact_email` 或 `env:HMRC_EMAIL` |
-| image7 | Is … the mail address you want to use? | `Yes` |
+| image3 | `/register/vat-group`：Is your organisation part of a VAT group in the UK? | `No` |
+| image6 | `/register/matching/what-is-your-email`：What email address can we use for customs notifications? | `doc:vat_contact_email` 或 `env:HMRC_EMAIL` |
+| image7 | `/register/matching/check-your-email`：Is … the email address you want to use? | `Yes`（标题里带客户邮箱，靠 `default_answer` 兜底） |
 | image8 | Enter code to confirm your email address | 人工在网页输入 |
 | image9 | Where is your organisation established? | `Rest of the world` |
 | image10 | What do you want to apply as? | `Organisation` |
@@ -101,17 +101,34 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
   都找不到就停止，不会误点别的按钮。
 - 地址宁可报错也不截断：两行街道地址放不下时抛错，要求人工改地址。
 
-## 6. 已知限制（需要在真实环境复核后再改）
+## 6. 真实环境试跑记录
+
+2026-09-22 用工作台跑过一次真实申请（客户资料来自授权表），从 `Start now` 到
+邮箱确认页共 20 个页面全部按配置走通，包含首次开户自动创建 Government Gateway
+账号（邮箱验证码、短信验证码各由人工输入一次）和 MFA 设置。程序停在
+`/register/matching/check-your-email`：当时配置按截图 OCR 写成 "the mail address"，
+真实文案是 "the em**ai**l address you want to use"，标题里还带着客户邮箱，
+所以没有匹配到规则、按安全策略停止并存下截图（`artifacts-eori/current-page.json`）。
+修正方式：该页补了路径规则 + `default_answer: Yes`，并根据审计日志补上真实路径：
+
+- `/register/vat-group`
+- `/register/matching/what-is-your-email`
+- `/register/matching/check-your-email`
+
+这几条都写成回归测试（`tests/test_eori_flow.py` 的 `EoriLiveRunRegressionTests`）。
+
+## 7. 已知限制（需要在真实环境复核后再改）
 
 - 截图里看不到 URL 的页面（邮箱通知、VAT 证书信息、VAT 注册日期、联系方式、地址确认）
   按页面标题匹配；真实文案若有出入，程序会停在那一页并留下截图和 `current-page.json`，
   按截图补 `heading_contains` 即可。
 - SIC 固定 47910、是否 VAT group 固定 `No`、是否同意公开名称地址固定 `No`，都是当前
   海外电商客户的业务模型；换业务类型前需要确认。
-- 流程只在离线层面验证过（190 个单元测试、覆盖率检查、`scripts/eori_smoke.py`
-  本地模拟页面走通 16 个填表页并停在最终核对），没有在真实 HMRC 环境跑完整申请。
+- 真实环境只走到邮箱确认页（见上），邮箱之后的页面还没有实测记录；单元测试 193 个、
+  覆盖率检查、`scripts/eori_smoke.py`（本地模拟页面走通 16 个填表页并停在最终核对）
+  都通过，但真实 HMRC 全流程尚未提交过完整申请。
 
-## 7. 工作台接入
+## 8. 工作台接入
 
 工作台按插件登记业务菜单（`workbench/plugins/eori.py`，`task_kind` 为 `uk_eori`），
 每个业务配一条独立的自动化通道，流程配置只在服务端启动参数里指定：

@@ -28,7 +28,26 @@
     },
     {
       "match": {
-        "heading_contains": "the mail address you want to use"
+        "path_contains": "/customs-registration-services/eori-only/register/matching/what-is-your-email"
+      },
+      "answers": {
+        "What email address can we use for customs notifications?": "doc:vat_contact_email|env:HMRC_EMAIL",
+        "Email address": "doc:vat_contact_email|env:HMRC_EMAIL",
+        "email-address": "doc:vat_contact_email|env:HMRC_EMAIL"
+      },
+      "action": "continue"
+    },
+    {
+      "match": {
+        "heading_contains": "the email address you want to use"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "Yes"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/matching/check-your-email"
       },
       "answers": {},
       "action": "continue",
@@ -37,6 +56,14 @@
     {
       "match": {
         "heading_contains": "part of a VAT group"
+      },
+      "answers": {},
+      "action": "continue",
+      "default_answer": "No"
+    },
+    {
+      "match": {
+        "path_contains": "/customs-registration-services/eori-only/register/vat-group"
       },
       "answers": {},
       "action": "continue",

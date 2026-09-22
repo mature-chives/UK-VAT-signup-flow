@@ -202,6 +202,54 @@ class EoriFlowConfigTests(unittest.TestCase):
         self.assertEqual(report["uncovered"], [])
 
 
+LIVE_RUN_PATHS: tuple[str, ...] = (
+    f"{EORI_REGISTER_PATH}/vat-group",
+    f"{EORI_REGISTER_PATH}/matching/what-is-your-email",
+    f"{EORI_REGISTER_PATH}/matching/check-your-email",
+)
+
+
+class EoriLiveRunRegressionTests(unittest.TestCase):
+    """2026-09-22 真实 HMRC 试跑暴露过的页面，防止规则回退。
+
+    那次从 `Start now` 一路走到邮箱确认页，程序在这一页停下（缺配置）并存了
+    截图，说明前面 19 页都按配置走通了。
+    """
+
+    def setUp(self) -> None:
+        with tempfile.TemporaryDirectory() as workspace:
+            copy = Path(workspace) / "vat-config.eori.flow.json"
+            copy.write_text(FLOW_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+            self.settings = load_settings(copy)
+
+    def test_live_run_paths_are_matched(self) -> None:
+        for path in LIVE_RUN_PATHS:
+            url = f"https://www.tax.service.gov.uk{path}"
+            matched = [rule for rule in self.settings.pages if rule.matches(url, "")]
+            self.assertTrue(matched, f"真实路径没有规则：{path}")
+
+    def test_check_your_email_page_defaults_to_yes(self) -> None:
+        # 这一页的标题里带客户邮箱，运行时传入的 label 无法预先写死，
+        # 只能靠 default_answer 兜底；真实环境曾因为漏配在这里停下。
+        heading = "Is applicant@example.com the email address you want to use?"
+        self.assertEqual(
+            self.settings.answer_for(
+                heading,
+                f"https://www.tax.service.gov.uk{EORI_REGISTER_PATH}/matching/check-your-email",
+                heading,
+            ),
+            (True, "Yes"),
+        )
+
+    def test_email_confirmation_heading_uses_email_wording(self) -> None:
+        found, value = self.settings.answer_for(
+            "whatever",
+            "https://www.tax.service.gov.uk/customs-registration-services/eori-only/register/other",
+            "Is applicant@example.com the email address you want to use?",
+        )
+        self.assertEqual((found, value), (True, "Yes"))
+
+
 class EoriRunnerGuardTests(unittest.TestCase):
     def test_eori_register_is_treated_as_application_page(self) -> None:
         for path in EORI_SCREENSHOT_PATHS:

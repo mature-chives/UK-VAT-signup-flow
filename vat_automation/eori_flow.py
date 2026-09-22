@@ -80,7 +80,8 @@ def eori_page_rules() -> list[dict[str, object]]:
         "vat-registered-date.year": "doc:vat-registration-date.year",
     }
     return [
-        # 自定义通知邮箱 → 确认邮箱提示 → 邮箱验证码（验证码由人工输入）
+        # 自定义通知邮箱 → 确认邮箱提示 → 邮箱验证码（验证码由人工输入）。
+        # 路径和标题各留一条规则：HMRC 改文案时路径仍能兜住。
         _rule(
             heading="What email address can we use for customs notifications",
             answers={
@@ -89,9 +90,19 @@ def eori_page_rules() -> list[dict[str, object]]:
                 "email-address": EORI_EMAIL_ANSWER,
             },
         ),
-        _rule(heading="the mail address you want to use", default="Yes"),
+        _rule(
+            f"{EORI_REGISTER_PATH}/matching/what-is-your-email",
+            answers={
+                "What email address can we use for customs notifications?": EORI_EMAIL_ANSWER,
+                "Email address": EORI_EMAIL_ANSWER,
+                "email-address": EORI_EMAIL_ANSWER,
+            },
+        ),
+        _rule(heading="the email address you want to use", default="Yes"),
+        _rule(f"{EORI_REGISTER_PATH}/matching/check-your-email", default="Yes"),
         # 登录后先问是否属于英国 VAT group（截图 image3），海外公司固定 No
         _rule(heading="part of a VAT group", default="No"),
+        _rule(f"{EORI_REGISTER_PATH}/vat-group", default="No"),
         _rule(
             f"{EORI_REGISTER_PATH}/matching/user-location",
             default="Rest of the world",
@@ -171,6 +182,9 @@ def build_eori_flow_config() -> dict[str, object]:
 
 # 截图里能确认路径的 EORI 页面（用于覆盖率检查）。
 EORI_SCREENSHOT_PATHS: tuple[str, ...] = (
+    f"{EORI_REGISTER_PATH}/vat-group",
+    f"{EORI_REGISTER_PATH}/matching/what-is-your-email",
+    f"{EORI_REGISTER_PATH}/matching/check-your-email",
     f"{EORI_REGISTER_PATH}/matching/user-location",
     f"{EORI_REGISTER_PATH}/matching/organisation-type",
     f"{EORI_REGISTER_PATH}/matching/name/third-country-organisation",
@@ -187,7 +201,7 @@ EORI_SCREENSHOT_PATHS: tuple[str, ...] = (
 EORI_SCREENSHOT_HEADINGS: tuple[str, ...] = (
     "What email address can we use for customs notifications?",
     # 该页标题里带客户邮箱，只能用不随客户变化的后半句匹配。
-    "the mail address you want to use",
+    "the email address you want to use",
     "Is your organisation part of a VAT group in the UK?",
     "Your UK VAT details",
     "When did you become VAT registered?",
