@@ -432,6 +432,77 @@ class AutomationRoutingTests(unittest.TestCase):
             context.store.public_credentials(task["customer_id"])["saved"]
         )
 
+    def test_gateway_account_created_by_vat_is_reused_for_eori(self) -> None:
+        """VAT 注册建号 → 自动挂到客户 → 该客户下次跑 EORI 直接取到同一账号。"""
+        customer_id = self._customer()
+        vat_task = asyncio.run(
+            create_task(
+                TaskCreateRequest(
+                    plugin_id="uk-vat-register",
+                    customer_id=customer_id,
+                    field_keys=["business_name"],
+                ),
+                username="alice",
+                _=None,
+            )
+        )
+
+        class VatStubManager:
+            def snapshot(self, username: str) -> dict:
+                return {
+                    "status": "reviewing",
+                    "message": "等待人工核对",
+                    "gateway_user_id": "123456789012",
+                }
+
+            def last_run_credentials(self, username: str) -> dict:
+                return {
+                    "HMRC_EMAIL": "client@example.test",
+                    "HMRC_PASSWORD": "pw-from-vat",
+                    "HMRC_MFA_PHONE": "13900000000",
+                }
+
+        context.jobs["uk_vat"] = VatStubManager()
+        context.task_owners[vat_task["id"]] = "alice"
+        _sync_automation_task(context.store.get_task(vat_task["id"]))
+        stored = context.store.get_credentials(customer_id)
+        self.assertEqual(stored["HMRC_USER_ID"], "123456789012")
+        self.assertEqual(stored["HMRC_PASSWORD"], "pw-from-vat")
+
+        # 同一客户再建 EORI 任务：启动时不填任何登录信息也能拿到上次的账号。
+        eori_task = asyncio.run(
+            create_task(
+                TaskCreateRequest(
+                    plugin_id="uk-eori-register",
+                    customer_id=customer_id,
+                    field_keys=["business_name"],
+                ),
+                username="alice",
+                _=None,
+            )
+        )
+        started: dict[str, object] = {}
+
+        class EoriStubManager:
+            identity_documents_required = 0
+
+            def start(self, username: str, request: object) -> None:
+                started["creds"] = dict(request.credentials)
+
+        context.jobs["uk_eori"] = EoriStubManager()
+        asyncio.run(
+            start_automation(
+                eori_task["id"],
+                "uk-eori",
+                UkVatStartRequest(extracted_confirmed=True),
+                "alice",
+                None,
+            )
+        )
+        self.assertEqual(started["creds"]["HMRC_USER_ID"], "123456789012")
+        self.assertEqual(started["creds"]["HMRC_PASSWORD"], "pw-from-vat")
+        self.assertEqual(started["creds"]["HMRC_EMAIL"], "client@example.test")
+
 
 if __name__ == "__main__":
     unittest.main()

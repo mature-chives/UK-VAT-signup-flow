@@ -777,14 +777,21 @@ class CredentialMemoryTests(unittest.TestCase):
             self.config_path, self.env_file, CredentialStore(self.credentials_file)
         )
 
-    def _start(self, **credentials: str) -> None:
+    def _start(
+        self, extracted_values: dict[str, str] | None = None, **credentials: str
+    ) -> None:
         self.manager.start(
             "alice",
-            StartRequest(extracted_confirmed=True, credentials=dict(credentials)),
+            StartRequest(
+                extracted_confirmed=True,
+                credentials=dict(credentials),
+                extracted_values=dict(extracted_values or {}),
+            ),
         )
         session = self.manager.session("alice")
         self.assertIsNotNone(session.thread)
         session.thread.join(timeout=5)
+        self.manager._set_terminal_state(session, "completed", "流程已完成")
 
     def test_password_is_reused_after_a_failed_run(self) -> None:
         self._start(HMRC_EMAIL="a@example.test", HMRC_PASSWORD="secret-1")
@@ -865,6 +872,58 @@ class CredentialMemoryTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "密码"):
             self.manager.save_credentials("alice")
+
+    def test_credentials_follow_the_project_code(self) -> None:
+        """VAT 注册建的 GG 账号按项目编号存，下次同项目的 EORI 注册能取到。"""
+        self._start(
+            {"project_code": "AB223322"},
+            HMRC_EMAIL="client@example.test",
+            HMRC_PASSWORD="pw-from-vat",
+            HMRC_MFA_PHONE="13900000000",
+        )
+        session = self.manager.session("alice")
+        self.manager.remember_gateway_user_id(session, "123456789012")
+        self.manager._persist_credentials(session)
+        snapshot = self.manager.snapshot("alice")
+        self.assertEqual(snapshot["credential_key"], "AB223322")
+        self.assertTrue(snapshot["credentials_stored"]["saved"])
+        self.assertEqual(snapshot["credentials_stored"]["user_id"], "12********12")
+        self.assertNotIn("pw-from-vat", json.dumps(snapshot, ensure_ascii=False))
+
+        # 同一项目再跑（模拟下一次 EORI 注册）：表单留空也能拿到上次的账号。
+        self._start({"project_code": "AB223322"})
+        self.assertEqual(self.manager.runs[-1]["HMRC_USER_ID"], "123456789012")
+        self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "pw-from-vat")
+        self.assertEqual(self.manager.runs[-1]["HMRC_EMAIL"], "client@example.test")
+
+        # 换一个项目不会串号：拿不到别的客户的凭据。
+        self._start({"project_code": "CD999999"})
+        self.assertNotIn("HMRC_PASSWORD", self.manager.runs[-1])
+        self.assertNotIn("HMRC_USER_ID", self.manager.runs[-1])
+
+    def test_fixed_password_from_env_pairs_with_per_client_user_id(self) -> None:
+        """密码是 .env 里的固定值，User ID 按客户存，两者按字段拼起来用。"""
+        with patch.dict(
+            os.environ,
+            {"HMRC_EMAIL": "fixed@example.test", "HMRC_PASSWORD": "fixed-pw"},
+            clear=False,
+        ):
+            # 第一次：新客户建号，表单只补了手机号，邮箱和密码用 .env 里的固定值。
+            self._start({"project_code": "AB223322"}, HMRC_MFA_PHONE="13900000000")
+            self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "fixed-pw")
+            self.assertEqual(self.manager.runs[-1]["HMRC_EMAIL"], "fixed@example.test")
+            session = self.manager.session("alice")
+            self.manager.remember_gateway_user_id(session, "123456789012")
+            self.manager._persist_credentials(session)
+
+            # 第二次（模拟 EORI）：密码继续来自 .env，User ID 来自该客户记录。
+            self._start({"project_code": "AB223322"})
+            self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "fixed-pw")
+            self.assertEqual(self.manager.runs[-1]["HMRC_USER_ID"], "123456789012")
+            snapshot = self.manager.snapshot("alice")
+        self.assertIn("HMRC_PASSWORD", snapshot["credentials_env"])
+        self.assertTrue(snapshot["credentials_stored"]["saved"])
+        self.assertNotIn("fixed-pw", json.dumps(snapshot, ensure_ascii=False))
 
     def test_clear_credentials_forgets_password(self) -> None:
         self._start(HMRC_PASSWORD="secret-1")

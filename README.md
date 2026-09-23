@@ -12,8 +12,8 @@
 - 到达 `Check your answers` 时保存整页复核文件并暂停；只有网页用户明确勾选确认后，程序才会点击 `Confirm and submit`。
 - 测试配置默认设置 `allow_live_application: false`，进入真实 VAT 申请数据区前停止，防止把随机资料写入 HMRC。
 - 网页上填过的 HMRC 登录信息只记在**服务端进程内存**里，失败重试不用重新输密码；重启服务即失效，网页上可点「清除已记住的登录信息」。密码不写入配置、状态接口或审计日志。
-- HMRC 登录信息存在**本机私有文件**里（0600、git 忽略）：工作台按客户存 `workbench-data/credentials.json`，单用户 `vat-web` 按账号存 `hmrc-credentials.json`。新建 Government Gateway 账号跑过后，程序会把 HMRC 返回的 User ID 和这次用的密码自动存下；下次启动表单留空即用，界面只显示掩码后的 User ID。
-- 取值优先级：任务表单填写 > 本机存储 > 进程内存（上一轮用过的）> 项目根目录 `.env`（可选默认值，权限 0600）。凭据不进入审计日志、状态接口或任务记录（审计里只留掩码）。
+- HMRC 登录信息分两层存：**所有客户共用的固定值**（例如每次注册都用同一个邮箱和密码）放项目根目录 `.env`（0600、git 忽略）；**每个客户各自的账号**（也就是新建 Government Gateway 拿到的 User ID）按客户存 `workbench-data/credentials.json`（工作台）或 `hmrc-credentials.json`（vat-web，按资料里的项目编号）。程序自动保存、按字段补齐，界面只显示掩码后的 User ID。
+- 取值优先级（逐个字段）：任务表单填写 > 该客户本机存储 > 进程内存（同客户上一轮用过的）> `.env` 默认值。换客户不会串号，`.env` 里的固定密码对谁都可用。凭据不进入审计日志、状态接口或任务记录（审计里只留掩码）。
 - 浏览器连不上 HMRC（Chrome 报 `ERR_CONNECTION_CLOSED` 之类）时，程序会先退回上一页自动重试 2 次；仍失败才停止并保存 `artifacts*-network-error.png`，不会把网络抖动当成配置问题。
 - 浏览器会话保存在本地 `.browser-profile/`，运行记录保存在 `artifacts/`，两者均默认忽略，不应提交到版本库。
 - 不要把 Government Gateway 用户名、密码或 MFA 密钥写入 JSON；用户名和密码仅通过进程环境变量传入，验证码只在内存中短暂使用。

@@ -158,6 +158,10 @@ class UserSession:
     # 上一次运行实际使用的登录信息，以及新建账号拿到的 Gateway User ID。
     last_credentials: dict[str, str] = field(default_factory=dict)
     gateway_user_id: str = ""
+    # 凭据存储的键：优先用资料里的项目编号，保证按客户对齐；没有则退回登录账号。
+    credential_key: str = ""
+    # 进程内存里记住的凭据属于哪个客户；换客户时不沿用。
+    saved_credentials_key: str = ""
     review_action: str = ""
     review_target: str = ""
     thread: threading.Thread | None = None
@@ -204,6 +208,16 @@ class JobManager:
         """`.env`/进程环境里可用的凭据键名（只返回名字，不返回值）。"""
         return sorted(env_credentials(ALLOWED_ENV_KEYS))
 
+    @staticmethod
+    def credential_key_for(session: UserSession, extracted_values: Mapping[str, str]) -> str:
+        """凭据按客户对齐：优先项目编号，其次登录账号。"""
+        project_code = str(extracted_values.get("project_code", "")).strip()
+        return project_code or session.username
+
+    @staticmethod
+    def _session_credential_key(session: UserSession) -> str:
+        return session.credential_key or session.username
+
     def _refresh_config(self) -> None:
         """把配置里的流程名、身份证明数量读进来，供界面显示和启动校验。"""
         try:
@@ -241,9 +255,13 @@ class JobManager:
                 "events": list(session.state["events"]),
                 "identity_documents": len(session.identity_documents),
                 "identity_required": self.identity_documents_required,
-                "credentials_saved": bool(session.saved_credentials),
+                "credentials_saved": bool(session.saved_credentials)
+                and session.saved_credentials_key == session.credential_key,
                 "credentials_env": self.env_credential_keys(),
-                "credentials_stored": self.credential_store.public(session.username),
+                "credentials_stored": self.credential_store.public(
+                    self._session_credential_key(session)
+                ),
+                "credential_key": self._session_credential_key(session),
                 "gateway_user_id": session.gateway_user_id,
                 "env_path": str(self.env_path),
                 "flow_name": self.flow_name,
@@ -290,15 +308,28 @@ class JobManager:
                 raise RuntimeError(
                     f"当前有 {self._busy_with} 的任务在运行，请等待其结束后再开始。"
                 )
-            # 只补缺的键，优先级：网页填写 > 按账号存储 > 本机内存记住 > .env/进程环境。
+            # 只补缺的键，优先级：网页填写 > 该客户存储 > 本机内存记住 > .env/进程环境。
+            session.credential_key = self.credential_key_for(
+                session, request.extracted_values
+            )
+            stored = self.credential_store.get(session.credential_key)
+            if not stored and session.credential_key != session.username:
+                stored = self.credential_store.get(session.username)
+            # 内存里记住的凭据只在同一客户内复用，避免张冠李戴。
+            remembered = (
+                dict(session.saved_credentials)
+                if session.saved_credentials_key == session.credential_key
+                else {}
+            )
             credentials = {
                 **env_credentials(ALLOWED_ENV_KEYS),
-                **session.saved_credentials,
-                **self.credential_store.get(session.username),
+                **remembered,
+                **stored,
                 **provided,
             }
-            if provided:
+            if provided or stored or remembered:
                 session.saved_credentials = dict(credentials)
+                session.saved_credentials_key = session.credential_key
             session.last_credentials = dict(credentials)
             session.gateway_user_id = ""
             self._busy_with = session.username
@@ -357,10 +388,26 @@ class JobManager:
         with self._lock:
             if session.state["status"] in ACTIVE_STATES:
                 raise RuntimeError("自动化运行中不能清除登录信息。")
+            keys = {self._session_credential_key(session), session.username}
             session.saved_credentials = {}
+            session.saved_credentials_key = ""
             session.last_credentials = {}
             session.gateway_user_id = ""
-        self.credential_store.clear(session.username)
+        for key in keys:
+            self.credential_store.clear(key)
+
+    def _persist_credentials(self, session: UserSession) -> None:
+        """跑到建号成功后自动把 Government Gateway 账号存到本机对应客户名下。"""
+        values = self.last_run_credentials(session.username)
+        if not values.get("HMRC_USER_ID") or not values.get("HMRC_PASSWORD"):
+            return
+        try:
+            self.credential_store.save(self._session_credential_key(session), values)
+        except (OSError, ValueError):
+            # 自动保存失败不影响流程结果，网页上还能手动保存。
+            return
+        session.saved_credentials = dict(values)
+        session.saved_credentials_key = self._session_credential_key(session)
 
     def remember_gateway_user_id(self, session: UserSession, user_id: str) -> None:
         """新建 Government Gateway 账号后，把 HMRC 显示的 User ID 记到会话里。"""
@@ -388,12 +435,15 @@ class JobManager:
         if not values.get("HMRC_PASSWORD"):
             raise ValueError("还没有可保存的密码：请先填一次密码并启动过任务。")
         try:
-            record = self.credential_store.save(session.username, values)
+            record = self.credential_store.save(
+                self._session_credential_key(session), values
+            )
         except OSError as exc:
             raise RuntimeError(
                 f"无法写入 {self.credential_store.path}：{exc}"
             ) from exc
         session.saved_credentials = dict(values)
+        session.saved_credentials_key = self._session_credential_key(session)
         return {
             "status": "saved",
             "path": str(self.credential_store.path),
@@ -766,14 +816,18 @@ class JobManager:
                 )
                 await runner.run(resume=resume)
 
-            if fresh_session:
-                with tempfile.TemporaryDirectory(
-                    prefix=f"uk-vat-web-profile-{session.username}-"
-                ) as directory:
-                    settings.profile_dir = Path(directory)
+            try:
+                if fresh_session:
+                    with tempfile.TemporaryDirectory(
+                        prefix=f"uk-vat-web-profile-{session.username}-"
+                    ) as directory:
+                        settings.profile_dir = Path(directory)
+                        asyncio.run(execute())
+                else:
                     asyncio.run(execute())
-            else:
-                asyncio.run(execute())
+            finally:
+                # 跑到建号成功就自动把 GG 账号存到该客户名下（失败不影响状态）。
+                self._persist_credentials(session)
         except AutomationStopped as exc:
             self._set_terminal_state(session, "stopped", str(exc))
             self._record_failure(session, "run-stopped", str(exc))
