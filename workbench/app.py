@@ -643,6 +643,42 @@ async def clear_customer_credentials(
     return {"status": "cleared", "customer_id": customer_id}
 
 
+@app.post("/api/tasks/{task_id}/{flow}/error-hold/resume")
+async def automation_error_hold_resume(
+    task_id: str,
+    flow: str,
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, str]:
+    """出错停留期间：人工确认已处理，程序从当前页继续。"""
+    _, manager = _automation_target(task_id, flow)
+    if context.task_owners.get(task_id) != username:
+        raise HTTPException(status_code=409, detail="当前没有你在这个任务上运行的任务。")
+    try:
+        manager.resolve_error_hold(username, "resume")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "resuming"}
+
+
+@app.post("/api/tasks/{task_id}/{flow}/error-hold/cancel")
+async def automation_error_hold_cancel(
+    task_id: str,
+    flow: str,
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, str]:
+    """出错停留期间：人工决定结束这一轮。"""
+    _, manager = _automation_target(task_id, flow)
+    if context.task_owners.get(task_id) != username:
+        raise HTTPException(status_code=409, detail="当前没有你在这个任务上运行的任务。")
+    try:
+        manager.resolve_error_hold(username, "cancel")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "cancelling"}
+
+
 @app.post("/api/tasks/{task_id}/{flow}/code")
 async def automation_code(
     task_id: str,

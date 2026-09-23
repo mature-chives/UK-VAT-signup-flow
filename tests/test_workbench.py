@@ -10,6 +10,8 @@ from workbench.app import (
     UkVatStartRequest,
     _automation_target,
     _sync_automation_task,
+    automation_error_hold_cancel,
+    automation_error_hold_resume,
     create_task,
     plugins,
     save_customer,
@@ -502,6 +504,23 @@ class AutomationRoutingTests(unittest.TestCase):
         self.assertEqual(started["creds"]["HMRC_USER_ID"], "123456789012")
         self.assertEqual(started["creds"]["HMRC_PASSWORD"], "pw-from-vat")
         self.assertEqual(started["creds"]["HMRC_EMAIL"], "client@example.test")
+
+    def test_error_hold_can_be_resolved_from_the_workbench(self) -> None:
+        """出错停留时，工作台也能让程序继续或取消。"""
+        task = self._task("uk-eori-register")
+        calls: dict[str, object] = {}
+
+        class StubManager:
+            def resolve_error_hold(self, username: str, decision: str) -> None:
+                calls["user"] = username
+                calls["decision"] = decision
+
+        context.jobs["uk_eori"] = StubManager()
+        context.task_owners[task["id"]] = "alice"
+        asyncio.run(automation_error_hold_resume(task["id"], "uk-eori", "alice", None))
+        self.assertEqual(calls, {"user": "alice", "decision": "resume"})
+        asyncio.run(automation_error_hold_cancel(task["id"], "uk-eori", "alice", None))
+        self.assertEqual(calls["decision"], "cancel")
 
 
 if __name__ == "__main__":

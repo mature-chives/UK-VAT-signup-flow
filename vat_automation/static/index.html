@@ -177,6 +177,17 @@
       <button id="continue" type="button" disabled>应用修改并继续</button>
     </div>
     <div id="pause-error" class="message error"></div>
+    <div id="error-hold" style="display:none">
+      <h3 style="margin-bottom:6px">出错已暂停，等你处理</h3>
+      <div class="notice" id="error-hold-message"></div>
+      <div class="hint" id="error-hold-countdown"></div>
+      <div class="hint">可以在本机 Chrome 里手动处理当前页面（例如点 Try again、补资料），然后点「继续当前任务」；程序会从当前页面重新判断并往下走。</div>
+      <div class="row">
+        <button id="error-hold-resume" type="button">继续当前任务</button>
+        <button id="error-hold-cancel" class="secondary" type="button">取消任务</button>
+      </div>
+      <div id="error-hold-status" class="message"></div>
+    </div>
     <div id="heading" class="meta"></div><div id="url" class="meta"></div>
     <h2 style="margin-top:24px">最近操作</h2><ul id="events" class="events"></ul>
 
@@ -539,6 +550,22 @@ $('pause').addEventListener('click', async () => {
   if (!response.ok) setMessage('pause-error', body.detail || '暂停失败', 'error');
 });
 
+$('error-hold-resume').addEventListener('click', async () => {
+  setMessage('error-hold-status', '');
+  const response = await post('/api/error-hold/resume');
+  const body = await response.json();
+  if (!response.ok) setMessage('error-hold-status', body.detail || '继续失败', 'error');
+  else setMessage('error-hold-status', '已通知程序从当前页面继续。', 'ok');
+});
+
+$('error-hold-cancel').addEventListener('click', async () => {
+  setMessage('error-hold-status', '');
+  const response = await post('/api/error-hold/cancel');
+  const body = await response.json();
+  if (!response.ok) setMessage('error-hold-status', body.detail || '取消失败', 'error');
+  else setMessage('error-hold-status', '已结束这一轮。', 'ok');
+});
+
 $('continue').addEventListener('click', async () => {
   setMessage('pause-error', ''); syncExtractedValues();
   if (!extractionConfirmed) {
@@ -799,8 +826,16 @@ async function refresh() {
     $('url').textContent = state.url ? 'URL：' + state.url : '';
     $('otp').style.display = state.status === 'waiting_code' ? 'block' : 'none';
     $('busy').style.display = state.busy_with ? 'block' : 'none';
+    const hold = state.error_hold || {};
+    $('error-hold').style.display = hold.active ? 'block' : 'none';
+    if (hold.active) {
+      $('error-hold-message').textContent = hold.message || '';
+      const left = Math.max(0, Math.round((hold.deadline || 0) - Date.now() / 1000));
+      $('error-hold-countdown').textContent =
+        `剩余 ${Math.floor(left / 60)} 分 ${left % 60} 秒；超时会自动取消这一轮。`;
+    }
     if (state.busy_with) $('busy').textContent = `当前有 ${state.busy_with} 的任务在运行，一次只能跑一个客户，请等待其结束。`;
-    $('start').disabled = ['starting','running','waiting_code','pausing','paused','reviewing','editing'].includes(state.status) || !!state.busy_with;
+    $('start').disabled = ['starting','running','waiting_code','pausing','paused','reviewing','editing','holding'].includes(state.status) || !!state.busy_with;
     $('pause').disabled = state.status !== 'running';
     $('continue').disabled = state.status !== 'paused';
     identityCount = state.identity_documents || identityCount;

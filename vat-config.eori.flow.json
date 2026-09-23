@@ -8,6 +8,7 @@
   "headless": false,
   "allow_live_application": true,
   "identity_documents_required": 0,
+  "error_hold_seconds": 600,
   "max_steps": 80,
   "answers": {
     "Country": "doc:country|env:HMRC_MFA_PHONE_COUNTRY",

@@ -22,6 +22,7 @@ from vat_automation.runner import (
     SAFE_ACTIONS,
     AutomationStopped,
     Control,
+    SafetyStop,
     VatAutomation,
     _masked_value,
     _safe_url,
@@ -1699,6 +1700,156 @@ class SignInMethodTests(unittest.TestCase):
         self.assertEqual(
             self._runner()._sign_in_method(), "Create new sign in details"
         )
+
+
+class ErrorHoldTests(unittest.TestCase):
+    """出错时停留等人工处理：继续 / 取消 / 安全拦截不停留。"""
+
+    def _settings(self, **overrides: object) -> Settings:
+        values: dict[str, object] = {
+            "start_url": "https://example.test",
+            "profile_dir": Path(".browser-profile"),
+            "artifacts_dir": Path("artifacts"),
+            "answers": {},
+            "pages": [],
+            "error_hold_seconds": 600,
+        }
+        values.update(overrides)
+        return Settings(**values)  # type: ignore[arg-type]
+
+    def test_hold_asks_provider_and_resumes(self) -> None:
+        seen: list[dict] = []
+
+        class HoldRunner(VatAutomation):
+            async def _audit(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def _snapshot(
+                self, _page: object, _heading: str, *, reason: str, missing: object = None
+            ) -> Path:
+                return Path("/private/tmp/never-written.png")
+
+        async def provider(payload: dict) -> str:
+            seen.append(payload)
+            return "resume"
+
+        class Page:
+            url = "https://www.tax.service.gov.uk/customs-registration-services/eori-only/register/cannot-confirm-vat-details"
+
+        runner = HoldRunner(self._settings(), interactive=False)
+        runner.error_hold_provider = provider
+        resumed = asyncio.run(
+            runner._hold_and_retry(Page(), "We cannot verify your VAT details", AutomationStopped("VAT 信息不符"))
+        )
+        self.assertTrue(resumed)
+        self.assertEqual(len(seen), 1)
+        self.assertIn("VAT 信息不符", seen[0]["message"])
+        self.assertEqual(seen[0]["heading"], "We cannot verify your VAT details")
+        self.assertEqual(seen[0]["seconds"], 600)
+
+    def test_hold_is_skipped_when_disabled(self) -> None:
+        called: list[dict] = []
+
+        class CancelRunner(VatAutomation):
+            async def _audit(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def _snapshot(self, *_args: object, **_kwargs: object) -> Path:
+                return Path("/private/tmp/never-written.png")
+
+        async def provider(payload: dict) -> str:
+            called.append(payload)
+            return "resume"
+
+        class Page:
+            url = "https://example.test/x"
+
+        runner = CancelRunner(self._settings(error_hold_seconds=0), interactive=False)
+        runner.error_hold_provider = provider
+        self.assertFalse(
+            asyncio.run(
+                runner._hold_and_retry(Page(), "标题", AutomationStopped("boom"))
+            )
+        )
+        self.assertEqual(called, [])
+
+    def test_safety_stop_never_holds(self) -> None:
+        called: list[dict] = []
+
+        class SafetyRunner(VatAutomation):
+            async def _heading(self, _page: object) -> str:
+                return "Declaration"
+
+            async def _audit(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def _step_once(self, _page: object, _heading: str) -> bool | None:
+                raise SafetyStop("当前配置仍包含测试资料")
+
+        async def provider(payload: dict) -> str:
+            called.append(payload)
+            return "resume"
+
+        class Page:
+            url = "https://www.tax.service.gov.uk/register-for-vat/honesty-declaration"
+
+            async def wait_for_load_state(self, _state: str) -> None:
+                return None
+
+        runner = SafetyRunner(self._settings(), interactive=False)
+        runner.error_hold_provider = provider
+        with self.assertRaises(SafetyStop):
+            asyncio.run(runner._drive(Page()))
+        self.assertEqual(called, [])
+
+    def test_drive_resumes_after_hold(self) -> None:
+        attempts: list[int] = []
+
+        class FlakyRunner(VatAutomation):
+            async def _heading(self, _page: object) -> str:
+                return "Title"
+
+            async def _audit(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def _snapshot(self, *_args: object, **_kwargs: object) -> Path:
+                return Path("/private/tmp/never-written.png")
+
+            async def _step_once(self, _page: object, _heading: str) -> bool | None:
+                attempts.append(1)
+                if len(attempts) == 1:
+                    raise AutomationStopped("第一次失败")
+                return True
+
+        async def provider(_payload: dict) -> str:
+            return "resume"
+
+        class Page:
+            url = "https://example.test/x"
+
+            async def wait_for_load_state(self, _state: str) -> None:
+                return None
+
+        runner = FlakyRunner(self._settings(), interactive=False)
+        runner.error_hold_provider = provider
+        asyncio.run(runner._drive(Page()))
+        self.assertEqual(len(attempts), 2)
+
+    def test_error_hold_seconds_parsing(self) -> None:
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as workspace:
+            path = Path(workspace) / "vat-config.json"
+            path.write_text(json.dumps({}), encoding="utf-8")
+            self.assertEqual(load_settings(path).error_hold_seconds, 600)
+            path.write_text(json.dumps({"error_hold_seconds": 0}), encoding="utf-8")
+            self.assertEqual(load_settings(path).error_hold_seconds, 0)
+            path.write_text(
+                json.dumps({"error_hold_seconds": -1}), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "error_hold_seconds"):
+                load_settings(path)
 
 
 class BrowserErrorRecoveryTests(unittest.TestCase):

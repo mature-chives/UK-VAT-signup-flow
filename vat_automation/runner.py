@@ -87,6 +87,10 @@ class AutomationStopped(RuntimeError):
     """流程按安全规则或因配置不完整而停止。"""
 
 
+class SafetyStop(AutomationStopped):
+    """安全拦截（例如测试资料不许写入真实申请），必须立即停止、不停留等待。"""
+
+
 class VatAutomation:
     def __init__(
         self,
@@ -105,6 +109,7 @@ class VatAutomation:
             [dict[str, Any]], Awaitable[dict[str, Any]]
         ] | None = None,
         gateway_user_id_provider: Callable[[str], Awaitable[None] | None] | None = None,
+        error_hold_provider: Callable[[dict[str, Any]], Awaitable[str]] | None = None,
         event_handler: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
         audit_context: Mapping[str, str] | None = None,
         document_values: dict[str, str] | Mapping[str, str] | None = None,
@@ -132,6 +137,9 @@ class VatAutomation:
         # 新建 Government Gateway 账号后把 User ID 交给外层保存（网页/工作台）。
         self.gateway_user_id_provider = gateway_user_id_provider
         self.gateway_user_id = ""
+        # 出错时（非安全拦截）先把现场交给人工：返回 "resume" 就从当前页重试，
+        # 返回 "cancel"/"timeout" 就按原样停止。为 None 时保持旧的立即停止行为。
+        self.error_hold_provider = error_hold_provider
         self.event_handler = event_handler
         # 多用户场景下用于在审计记录里标注操作人，不含任何凭据。
         self.audit_context = dict(audit_context or {})
@@ -181,126 +189,182 @@ class VatAutomation:
             await self._audit("page", step=step, url=page.url, heading=heading)
             if self.pause_checkpoint_provider is not None:
                 await self.pause_checkpoint_provider(page.url, heading)
-
-            if self._is_browser_error_page(page.url, heading):
-                if await self._recover_from_browser_error(page, heading):
-                    continue
-                await self._snapshot(page, heading, reason="network-error")
-                raise AutomationStopped(
-                    "浏览器打不开 HMRC 页面（Chrome 报连接错误），已自动重试 "
-                    f"{BROWSER_ERROR_RETRIES} 次仍未成功：{heading or page.url}。"
-                    "请检查本机网络或代理后重新启动任务。"
-                )
-            self._last_good_url = page.url
-
-            if self._is_remote_error_heading(heading):
-                await self._snapshot(page, heading, reason="remote-service-error")
-                raise AutomationStopped(
-                    f"远端服务返回 {heading}，请稍后重试或改用非 headless 模式。"
-                )
-
-            if self._is_auth_page(page.url):
-                await self._handle_auth(page, heading)
+            try:
+                result = await self._step_once(page, heading)
+            except SafetyStop:
+                # 安全拦截（测试资料不许写入真实申请）保持立即停止，不留存。
+                raise
+            except AutomationStopped as exc:
+                if not await self._hold_and_retry(page, heading, exc):
+                    raise
                 continue
-
-            if not self.settings.allow_live_application and self._is_application_page(
-                page.url
-            ):
-                await self._snapshot(page, heading, reason="live-application-disabled")
-                raise AutomationStopped(
-                    "测试配置禁止向真实 HMRC VAT 申请写入虚构资料。"
-                )
-
-            verification_input = await self._verification_code_input(page, heading)
-            if verification_input is not None:
-                await self._enter_verification_code(page, verification_input)
-                continue
-
-            if self._is_honesty_declaration_page(page.url):
-                await self._handle_honesty_declaration(page, heading)
-                continue
-
-            if self._is_final_page(page.url, heading):
-                await self._handle_final_review(page, heading)
+            if result is True:
                 return
-
-            if "/register-for-vat/manage-registrations" in page.url:
-                if not await self._click_create_vat_application(page):
-                    await self._snapshot(
-                        page, heading, reason="missing-create-vat-application"
-                    )
-                    raise AutomationStopped(
-                        "申请管理页面未找到 Create a new application。"
-                    )
+            if result is False:
+                # 只做了跳转/点击，不需要额外等待（保持原有节奏）。
                 continue
+            await page.wait_for_timeout(350)
+        raise AutomationStopped(f"已达到最大步骤数 {self.settings.max_steps}。")
 
-            if "/file-upload/uploading-document" in page.url:
-                if not await self._wait_for_upload_processing(page):
-                    await self._snapshot(
-                        page, heading, reason="file-upload-processing-timeout"
-                    )
-                    raise AutomationStopped(
-                        "HMRC 文件上传处理超过 60 秒，已停止供检查。"
-                    )
-                continue
+    async def _hold_and_retry(
+        self, page: Any, heading: str, exc: AutomationStopped
+    ) -> bool:
+        """出错时把现场交给人工；返回 True 表示人工要求从当前页重试。
 
-            if (
-                "/file-upload/summary" in page.url
-                and self.file_uploads_remaining_provider is not None
-            ):
-                remaining = await self.file_uploads_remaining_provider()
-                # HMRC 汇总页始终使用 Continue；如果还缺文件，
-                # 服务端会在提交后自动返回上传页。
-                action_name = "Continue"
-                if not await self._click_named_action(page, action_name):
-                    await self._snapshot(
-                        page, heading, reason="missing-file-upload-summary-action"
-                    )
-                    raise AutomationStopped(
-                        f"文件上传汇总页找不到操作：{action_name}"
-                    )
-                await self._audit(
-                    "file-upload-summary-action",
-                    action=action_name,
-                    files_remaining=remaining,
-                    url=page.url,
-                )
-                continue
+        - 网页/工作台跑时注册了 error_hold_provider：停留等待，人工可"继续/取消"
+        - 命令行或 error_hold_seconds=0：保持旧的立即停止行为
+        - 安全拦截（SafetyStop）在调用方就被排除，不会走到这里
+        """
+        if self.error_hold_provider is None or self.settings.error_hold_seconds <= 0:
+            return False
+        screenshot = await self._snapshot(page, heading, reason="error-hold")
+        await self._audit(
+            "error-hold",
+            url=page.url,
+            heading=heading,
+            message=str(exc),
+            seconds=self.settings.error_hold_seconds,
+        )
+        decision = await self.error_hold_provider(
+            {
+                "url": _safe_url(page.url),
+                "heading": heading,
+                "message": str(exc),
+                "seconds": self.settings.error_hold_seconds,
+                "screenshot": str(screenshot),
+            }
+        )
+        await self._audit(
+            "error-hold-finished",
+            url=page.url,
+            heading=heading,
+            decision=str(decision),
+        )
+        return str(decision) == "resume"
 
-            action = self.settings.action_for(page.url, heading)
-            if action == "stop":
-                await self._snapshot(page, heading, reason="configured-stop")
-                raise AutomationStopped("配置要求在当前页面停止。")
-            if action.startswith("skip:"):
-                name = action.removeprefix("skip:")
-                if not await self._click_named_action(page, name):
-                    await self._snapshot(page, heading, reason="missing-skip-action")
-                    raise AutomationStopped(f"找不到跳过操作：{name}")
-                continue
+    async def _step_once(self, page: Any, heading: str) -> bool | None:
+        """处理当前页面一次。
 
-            missing = await self._fill_until_stable(page, heading)
-            if missing:
+        返回 True：流程已完成；返回 False：已跳转，直接进入下一步；
+        返回 None：正常填表并点了继续，调用方稍作等待。
+        """
+        if self._is_browser_error_page(page.url, heading):
+            if await self._recover_from_browser_error(page, heading):
+                return False
+            await self._snapshot(page, heading, reason="network-error")
+            raise AutomationStopped(
+                "浏览器打不开 HMRC 页面（Chrome 报连接错误），已自动重试 "
+                f"{BROWSER_ERROR_RETRIES} 次仍未成功：{heading or page.url}。"
+                "请检查本机网络或代理后重新启动任务。"
+            )
+        self._last_good_url = page.url
+
+        if self._is_remote_error_heading(heading):
+            await self._snapshot(page, heading, reason="remote-service-error")
+            raise AutomationStopped(
+                f"远端服务返回 {heading}，请稍后重试或改用非 headless 模式。"
+            )
+
+        if self._is_auth_page(page.url):
+            await self._handle_auth(page, heading)
+            return False
+
+        if not self.settings.allow_live_application and self._is_application_page(
+            page.url
+        ):
+            await self._snapshot(page, heading, reason="live-application-disabled")
+            raise SafetyStop(
+                "测试配置禁止向真实 HMRC VAT 申请写入虚构资料。"
+            )
+
+        verification_input = await self._verification_code_input(page, heading)
+        if verification_input is not None:
+            await self._enter_verification_code(page, verification_input)
+            return False
+
+        if self._is_honesty_declaration_page(page.url):
+            await self._handle_honesty_declaration(page, heading)
+            return False
+
+        if self._is_final_page(page.url, heading):
+            await self._handle_final_review(page, heading)
+            return True
+
+        if "/register-for-vat/manage-registrations" in page.url:
+            if not await self._click_create_vat_application(page):
                 await self._snapshot(
-                    page, heading, reason="missing-config", missing=missing
+                    page, heading, reason="missing-create-vat-application"
                 )
                 raise AutomationStopped(
-                    "当前页面缺少必填配置：" + "；".join(sorted(set(missing)))
+                    "申请管理页面未找到 Create a new application。"
                 )
+            return False
 
-            clicked = (
-                await self._click_safe_action(page)
-                if action == "continue"
-                else await self._click_named_action(page, action)
+        if "/file-upload/uploading-document" in page.url:
+            if not await self._wait_for_upload_processing(page):
+                await self._snapshot(
+                    page, heading, reason="file-upload-processing-timeout"
+                )
+                raise AutomationStopped(
+                    "HMRC 文件上传处理超过 60 秒，已停止供检查。"
+                )
+            return False
+
+        if (
+            "/file-upload/summary" in page.url
+            and self.file_uploads_remaining_provider is not None
+        ):
+            remaining = await self.file_uploads_remaining_provider()
+            # HMRC 汇总页始终使用 Continue；如果还缺文件，
+            # 服务端会在提交后自动返回上传页。
+            action_name = "Continue"
+            if not await self._click_named_action(page, action_name):
+                await self._snapshot(
+                    page, heading, reason="missing-file-upload-summary-action"
+                )
+                raise AutomationStopped(
+                    f"文件上传汇总页找不到操作：{action_name}"
+                )
+            await self._audit(
+                "file-upload-summary-action",
+                action=action_name,
+                files_remaining=remaining,
+                url=page.url,
             )
-            if not clicked and "/application-progress" in page.url:
-                clicked = await self._click_next_task(page)
-            if not clicked:
-                await self._snapshot(page, heading, reason="no-safe-action")
-                raise AutomationStopped("找不到安全的继续按钮，已停止供人工检查。")
-            self._pending_file_path = None
-            await page.wait_for_timeout(350)
+            return False
 
-        raise AutomationStopped(f"已达到最大步骤数 {self.settings.max_steps}。")
+        action = self.settings.action_for(page.url, heading)
+        if action == "stop":
+            await self._snapshot(page, heading, reason="configured-stop")
+            raise AutomationStopped("配置要求在当前页面停止。")
+        if action.startswith("skip:"):
+            name = action.removeprefix("skip:")
+            if not await self._click_named_action(page, name):
+                await self._snapshot(page, heading, reason="missing-skip-action")
+                raise AutomationStopped(f"找不到跳过操作：{name}")
+            return False
+
+        missing = await self._fill_until_stable(page, heading)
+        if missing:
+            await self._snapshot(
+                page, heading, reason="missing-config", missing=missing
+            )
+            raise AutomationStopped(
+                "当前页面缺少必填配置：" + "；".join(sorted(set(missing)))
+            )
+
+        clicked = (
+            await self._click_safe_action(page)
+            if action == "continue"
+            else await self._click_named_action(page, action)
+        )
+        if not clicked and "/application-progress" in page.url:
+            clicked = await self._click_next_task(page)
+        if not clicked:
+            await self._snapshot(page, heading, reason="no-safe-action")
+            raise AutomationStopped("找不到安全的继续按钮，已停止供人工检查。")
+        self._pending_file_path = None
+        return None
 
     @staticmethod
     def _is_browser_error_page(url: str, heading: str) -> bool:
@@ -348,7 +412,7 @@ class VatAutomation:
     async def _capture_gateway_user_id(self, page: Any, heading: str) -> None:
         """新建 Government Gateway 账号后，HMRC 会显示 User ID；抓下来供复用。
 
-        审计日志只记掩码后的值，完整值放内存交给网页/工作台保存（如写进 .env）。
+        审计日志只记掩码后的值，完整值放内存交给网页/工作台保存。
         """
         if GATEWAY_USER_ID_HEADING not in normalize(heading):
             # 页面标题可能改文案，注册确认页的 URL 也认。
@@ -918,7 +982,7 @@ class VatAutomation:
                 reason="synthetic-live-data",
                 missing=warnings,
             )
-            raise AutomationStopped(
+            raise SafetyStop(
                 "当前配置仍包含测试资料，不能自动点击 Accept and continue："
                 + "；".join(warnings)
             )

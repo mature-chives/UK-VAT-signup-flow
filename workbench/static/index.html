@@ -186,6 +186,16 @@
         <p class="hint" id="gateway-hint" hidden></p>
         <p class="hint" id="customer-credential-hint"></p>
       </div>
+      <div id="error-hold-box" style="display:none">
+        <h3>出错已暂停，等你处理</h3>
+        <p class="hint" id="error-hold-message"></p>
+        <p class="hint" id="error-hold-countdown"></p>
+        <p class="hint">可在服务器本机 Chrome 里手动处理当前页面（例如点 Try again、补资料），再点「继续当前任务」。</p>
+        <div class="actions">
+          <button id="error-hold-resume" type="button">继续当前任务</button>
+          <button id="error-hold-cancel" class="secondary" type="button">取消任务</button>
+        </div>
+      </div>
       <div id="otp">
         <strong>请输入验证码</strong>
         <input id="code" autocomplete="one-time-code" inputmode="text" spellcheck="false">
@@ -773,6 +783,14 @@ function showAutomationStatus(task) {
   if (gatewayId) {
     $("gateway-hint").textContent = `新建的 Gateway User ID：${gatewayId}（会自动挂到该客户名下，下次可直接用 Government Gateway 登录）。`;
   }
+  const hold = snap.error_hold || {};
+  $("error-hold-box").style.display = hold.active ? "block" : "none";
+  if (hold.active) {
+    $("error-hold-message").textContent = hold.message || "";
+    const left = Math.max(0, Math.round((hold.deadline || 0) - Date.now() / 1000));
+    $("error-hold-countdown").textContent =
+      `剩余 ${Math.floor(left / 60)} 分 ${left % 60} 秒；超时会自动取消这一轮。`;
+  }
 }
 
 function applyHash() {
@@ -1040,6 +1058,29 @@ $("save-customer-credentials").addEventListener("click", async () => {
     $("run-status").textContent = error.message;
   }
 });
+
+async function resolveErrorHold(decision) {
+  const taskId = selectedTaskId || currentAutomationTaskId;
+  if (!taskId) return;
+  const flow = automationPrefix(currentPlugin && currentPlugin.task_kind);
+  try {
+    await api(`/api/tasks/${taskId}/${flow}/error-hold/${decision}`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({})
+    });
+    $("run-status").style.display = "block";
+    $("run-status").className = "status";
+    $("run-status").textContent = decision === "resume" ? "已通知程序从当前页面继续。" : "已结束这一轮。";
+    await refresh();
+    renderJob();
+  } catch (error) {
+    $("run-status").style.display = "block";
+    $("run-status").className = "status blocked";
+    $("run-status").textContent = error.message;
+  }
+}
+$("error-hold-resume").addEventListener("click", () => resolveErrorHold("resume"));
+$("error-hold-cancel").addEventListener("click", () => resolveErrorHold("cancel"));
 async function uploadTranslate(kind) {
   const taskId = $("translate-task").value || selectedTaskId;
   const file = $("translate-file").files[0];

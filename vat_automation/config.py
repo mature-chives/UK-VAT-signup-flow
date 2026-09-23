@@ -353,6 +353,8 @@ class Settings:
     max_steps: int = 250
     # VAT 流程要求三份身份证明；EORI 等不需要上传资料的流程可在配置里设为 0。
     identity_documents_required: int = DEFAULT_IDENTITY_DOCUMENTS
+    # 出错时停留等人工处理的时间（秒）；0 表示出错立即停止，不等待。
+    error_hold_seconds: int = 600
 
     def answer_for(
         self,
@@ -529,7 +531,20 @@ def load_settings(path: Path) -> Settings:
         allow_live_application=bool(raw.get("allow_live_application", False)),
         max_steps=int(raw.get("max_steps", 250)),
         identity_documents_required=_identity_documents_required(raw),
+        error_hold_seconds=_error_hold_seconds(raw),
     )
+
+
+def _error_hold_seconds(raw: Mapping[str, Any]) -> int:
+    """出错停留时长：默认 10 分钟，0 表示不等待。"""
+    value = raw.get("error_hold_seconds", 600)
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"error_hold_seconds 必须是整数：{value!r}") from exc
+    if seconds < 0:
+        raise ValueError(f"error_hold_seconds 不能为负数：{seconds}")
+    return seconds
 
 
 def _identity_documents_required(raw: Mapping[str, Any]) -> int:

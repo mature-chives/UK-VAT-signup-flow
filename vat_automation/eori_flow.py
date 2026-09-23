@@ -178,6 +178,8 @@ def build_eori_flow_config() -> dict[str, object]:
         "allow_live_application": True,
         # EORI 不需要上传身份证明文件。
         "identity_documents_required": 0,
+        # 出错时停留 10 分钟，等网页上的人工决定（继续 / 取消）。
+        "error_hold_seconds": 600,
         "max_steps": 80,
         "answers": eori_global_answers(),
         "pages": eori_page_rules(),

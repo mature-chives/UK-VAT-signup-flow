@@ -6,6 +6,7 @@
   "browser_channel": "chrome",
   "headless": false,
   "allow_live_application": true,
+  "error_hold_seconds": 600,
   "max_steps": 250,
   "answers": {
     "Why do you want to register the business for VAT?": "It’s selling goods or services and needs or wants to charge VAT to customers",

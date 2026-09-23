@@ -3,6 +3,8 @@ import io
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -1070,6 +1072,80 @@ class CredentialMemoryTests(unittest.TestCase):
         self.assertEqual(self.manager.credential_store.get("alice"), {})
         self._start(HMRC_PASSWORD="secret-3")
         self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "secret-3")
+
+
+class ErrorHoldWebTests(unittest.TestCase):
+    """出错停留：网页决定继续 / 取消，超时按取消处理。"""
+
+    def setUp(self) -> None:
+        self._workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(self._workspace.cleanup)
+        base = Path(self._workspace.name)
+        config = base / "vat-config.eori.flow.json"
+        config.write_text(
+            json.dumps(
+                {"identity_documents_required": 0, "error_hold_seconds": 1}
+            ),
+            encoding="utf-8",
+        )
+        self.manager = JobManager(
+            config, base / ".env", CredentialStore(base / "hmrc-credentials.json")
+        )
+        self.session = self.manager.session("alice")
+
+    def _hold_in_thread(self) -> tuple[threading.Thread, list[str]]:
+        result: list[str] = []
+
+        async def hold() -> None:
+            result.append(
+                await self.manager._error_hold(
+                    self.session, {"seconds": 30, "message": "缺配置", "heading": "H"}
+                )
+            )
+
+        thread = threading.Thread(target=lambda: asyncio.run(hold()), daemon=True)
+        thread.start()
+        for _ in range(100):
+            if self.manager.snapshot("alice")["status"] == "holding":
+                break
+            time.sleep(0.05)
+        return thread, result
+
+    def test_timeout_finishes_the_hold(self) -> None:
+        decision = asyncio.run(
+            self.manager._error_hold(
+                self.session, {"seconds": 0, "message": "缺配置", "heading": "H"}
+            )
+        )
+        self.assertEqual(decision, "timeout")
+        snapshot = self.manager.snapshot("alice")
+        self.assertFalse(snapshot["error_hold"]["active"])
+        self.assertNotEqual(snapshot["status"], "holding")
+
+    def test_web_can_resume_or_cancel(self) -> None:
+        thread, result = self._hold_in_thread()
+        snapshot = self.manager.snapshot("alice")
+        self.assertEqual(snapshot["status"], "holding")
+        self.assertTrue(snapshot["error_hold"]["active"])
+        self.assertIn("出错已暂停", snapshot["message"])
+        self.assertEqual(snapshot["error_hold"]["message"], "缺配置")
+        self.assertGreater(snapshot["error_hold"]["deadline"], time.time())
+
+        self.manager.resolve_error_hold("alice", "resume")
+        thread.join(timeout=5)
+        self.assertEqual(result, ["resume"])
+        self.assertFalse(self.manager.snapshot("alice")["error_hold"].get("active"))
+
+        thread, result = self._hold_in_thread()
+        self.manager.resolve_error_hold("alice", "cancel")
+        thread.join(timeout=5)
+        self.assertEqual(result, ["cancel"])
+
+    def test_resolve_requires_an_active_hold(self) -> None:
+        with self.assertRaises(RuntimeError):
+            self.manager.resolve_error_hold("alice", "resume")
+        with self.assertRaises(ValueError):
+            self.manager.resolve_error_hold("alice", "whatever")
 
 
 if __name__ == "__main__":

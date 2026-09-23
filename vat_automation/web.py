@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import traceback
 import uuid
 import webbrowser
@@ -69,7 +70,7 @@ ALLOWED_ENV_KEYS = {
 }
 ACTIVE_STATES = {
     "starting", "running", "waiting_code", "pausing", "paused", "reviewing",
-    "editing",
+    "editing", "holding",
 }
 SESSION_COOKIE = "vat_session"
 CSRF_COOKIE = "vat_csrf"
@@ -172,6 +173,10 @@ class UserSession:
     saved_credentials_key: str = ""
     review_action: str = ""
     review_target: str = ""
+    # 出错停留：等人工在网页上选择"继续"或"取消"。
+    hold_event: threading.Event = field(default_factory=threading.Event)
+    hold_decision: str = ""
+    error_hold: dict[str, Any] = field(default_factory=dict)
     thread: threading.Thread | None = None
 
 
@@ -319,6 +324,7 @@ class JobManager:
                 ),
                 "credential_key": self._session_credential_key(session),
                 "gateway_user_id": session.gateway_user_id,
+                "error_hold": dict(session.error_hold) or {"active": False},
                 "env_path": str(self.env_path),
                 "flow_name": self.flow_name,
                 "sign_in_method": self.default_sign_in_method,
@@ -562,6 +568,66 @@ class JobManager:
                 stream.write(json.dumps(record, ensure_ascii=False) + "\n")
         except OSError:
             return
+
+    async def _error_hold(self, session: UserSession, payload: dict[str, Any]) -> str:
+        """出错时停留：等网页上的人工决定，超时按取消处理。
+
+        返回 "resume"（从当前页重试）或 "cancel"/"timeout"（按原样停止）。
+        """
+        seconds = max(0, int(payload.get("seconds") or 0))
+        message = str(payload.get("message", ""))
+        heading = str(payload.get("heading", ""))
+        deadline = time.monotonic() + seconds
+        with self._lock:
+            session.hold_event.clear()
+            session.hold_decision = ""
+            session.error_hold = {
+                "active": True,
+                "message": message,
+                "heading": heading,
+                "url": str(payload.get("url", "")),
+                "seconds": seconds,
+                "deadline": time.time() + seconds,
+            }
+            session.state["status"] = "holding"
+            session.state["heading"] = heading
+            session.state["message"] = (
+                f"出错已暂停：{message}（最多停留 {max(1, seconds // 60)} 分钟，"
+                "可在网页上选择继续或取消）"
+            )
+        while time.monotonic() < deadline:
+            if session.hold_event.wait(timeout=1.0):
+                break
+            remaining = max(0, int(deadline - time.monotonic()))
+            with self._lock:
+                session.state["message"] = (
+                    f"出错已暂停（剩余 {remaining // 60} 分 {remaining % 60} 秒）：{message}"
+                )
+        with self._lock:
+            decision = session.hold_decision or "timeout"
+            session.hold_decision = ""
+            session.error_hold = {}
+            session.state["status"] = "running"
+            session.state["message"] = (
+                "已收到人工选择：继续从当前页面重试"
+                if decision == "resume"
+                else "已结束这一轮（人工取消或超时）"
+            )
+        return decision
+
+    def resolve_error_hold(self, username: str, decision: str) -> None:
+        """前端决定：继续当前任务或取消。"""
+        if decision not in {"resume", "cancel"}:
+            raise ValueError(f"无效的处理方式：{decision}")
+        session = self.session(username)
+        with self._lock:
+            if session.state["status"] != "holding":
+                raise RuntimeError("当前没有等待处理的出错暂停。")
+            session.hold_decision = decision
+            session.state["message"] = (
+                "正在从当前页面重试" if decision == "resume" else "正在结束这一轮"
+            )
+            session.hold_event.set()
 
     def pause(self, username: str) -> None:
         session = self.session(username)
@@ -891,6 +957,7 @@ class JobManager:
                     gateway_user_id_provider=partial(
                         self.remember_gateway_user_id, session
                     ),
+                    error_hold_provider=partial(self._error_hold, session),
                     event_handler=partial(self._event, session),
                     audit_context={"user": session.username},
                 )
@@ -1228,6 +1295,30 @@ async def pause(
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "pausing"}
+
+
+@app.post("/api/error-hold/resume")
+async def error_hold_resume(
+    username: str = Depends(current_user), _: None = Depends(require_csrf)
+) -> dict[str, str]:
+    """出错停留期间：人工确认已处理，程序从当前页继续。"""
+    try:
+        context.jobs().resolve_error_hold(username, "resume")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "resuming"}
+
+
+@app.post("/api/error-hold/cancel")
+async def error_hold_cancel(
+    username: str = Depends(current_user), _: None = Depends(require_csrf)
+) -> dict[str, str]:
+    """出错停留期间：人工决定结束这一轮。"""
+    try:
+        context.jobs().resolve_error_hold(username, "cancel")
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "cancelling"}
 
 
 @app.post("/api/continue")
