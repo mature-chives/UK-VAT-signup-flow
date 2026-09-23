@@ -111,6 +111,11 @@ class RemoteEditSubmitRequest(BaseModel):
     action: str = Field(default="", max_length=160)
 
 
+class CredentialSaveRequest(BaseModel):
+    # 只接受白名单键，具体校验在保存时做；这里限制体积。
+    credentials: dict[str, str] = Field(default_factory=dict)
+
+
 @dataclass
 class ServerContext:
     users: UserStore = field(default_factory=lambda: UserStore(Path("users.json")))
@@ -138,6 +143,18 @@ class ServerContext:
             manager = JobManager(self.config_for(task_kind))
             self.jobs[task_kind] = manager
         return manager
+
+    def last_run_credentials(self, username: str) -> dict[str, str]:
+        """当前用户在任一自动化通道上最后一次实际使用的登录信息。"""
+        values: dict[str, str] = {}
+        for task_kind, manager in list(self.jobs.items()):
+            if task_kind not in AUTOMATION_FLOWS:
+                continue
+            try:
+                values.update(manager.last_run_credentials(username))
+            except Exception:
+                continue
+        return values
 
     def needs_setup(self) -> bool:
         return self.users.is_empty()
@@ -234,7 +251,9 @@ def _public_customer(record: dict[str, Any]) -> dict[str, Any]:
         {"id": item.get("id"), "name": item.get("name"), "category": item.get("category")}
         for item in record.get("files", [])
     ]
-    return {**record, "files": files}
+    # 只暴露脱敏后的登录信息（有没有保存、掩码后的 User ID）。
+    credentials = context.store.public_credentials(str(record.get("id", "")))
+    return {**record, "files": files, "credentials": credentials}
 
 
 def _public_task(record: dict[str, Any]) -> dict[str, Any]:
@@ -255,7 +274,9 @@ def _sync_automation_task(task: dict[str, Any]) -> dict[str, Any]:
     owner = context.task_owners.get(task["id"])
     if not owner or task_kind not in AUTOMATION_FLOWS:
         return task
-    snap = context.job_manager(task_kind).snapshot(owner)
+    manager = context.job_manager(task_kind)
+    snap = manager.snapshot(owner)
+    _store_captured_credentials(task, task_kind, owner, snap)
     mapping = {
         "idle": task.get("status"),
         "starting": "in_progress",
@@ -279,6 +300,28 @@ def _sync_automation_task(task: dict[str, Any]) -> dict[str, Any]:
         )
     except KeyError:
         return task
+
+
+def _store_captured_credentials(
+    task: dict[str, Any], task_kind: str, owner: str, snap: dict[str, Any]
+) -> None:
+    """跑到「新建 Government Gateway 账号」那页后，把账号挂到该客户名下。"""
+    customer_id = str(task.get("customer_id", ""))
+    gateway_id = str(snap.get("gateway_user_id", "") or "")
+    if not customer_id or not gateway_id:
+        return
+    stored = context.store.get_credentials(customer_id)
+    if stored.get("HMRC_USER_ID") == gateway_id:
+        return
+    values = {
+        **context.job_manager(task_kind).last_run_credentials(owner),
+        "HMRC_USER_ID": gateway_id,
+    }
+    try:
+        context.store.save_credentials(customer_id, values)
+    except (KeyError, ValueError, OSError):
+        # 保存凭据失败不应影响任务状态同步。
+        return
 
 
 def _automation_target(task_id: str, flow: str) -> tuple[dict[str, Any], JobManager]:
@@ -523,14 +566,17 @@ async def start_automation(
             documents.append((str(item["name"]), path.read_bytes()))
         manager.store_identity_documents(username, documents, required)
     values = payload.extracted_values or dict(task.get("selected_fields") or {})
+    # 先取该客户已保存的登录信息，再用本次表单里的值覆盖（表单优先）。
+    stored = context.store.get_credentials(str(task.get("customer_id", "")))
+    provided = {
+        key: value
+        for key, value in payload.credentials.items()
+        if key in ALLOWED_ENV_KEYS and value.strip()
+    }
     request = StartRequest(
         fresh_session=payload.fresh_session,
         resume=False,
-        credentials={
-            key: value
-            for key, value in payload.credentials.items()
-            if key in ALLOWED_ENV_KEYS
-        },
+        credentials={**stored, **provided},
         extracted_values=values,
         extracted_confirmed=True,
     )
@@ -557,26 +603,44 @@ async def clear_credentials(
     return {"status": "cleared"}
 
 
-@app.post("/api/credentials/save")
-async def save_credentials(
+@app.post("/api/customers/{customer_id}/credentials/save")
+async def save_customer_credentials(
+    customer_id: str,
+    payload: CredentialSaveRequest,
     username: str = Depends(current_user),
     _: None = Depends(require_csrf),
-) -> dict[str, str]:
-    """把上次运行的登录信息（含新建的 Gateway User ID）写回 .env。"""
-    last_error: ValueError | None = None
-    for task_kind in AUTOMATION_FLOWS:
-        try:
-            path = context.job_manager(task_kind).save_credentials_to_env(username)
-        except ValueError as exc:
-            # 这条通道还没有可保存的信息，试下一条。
-            last_error = exc
-            continue
-        except (OSError, RuntimeError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"status": "saved", "path": str(path)}
-    raise HTTPException(
-        status_code=400, detail=str(last_error or "没有可保存的登录信息。")
-    )
+) -> dict[str, Any]:
+    """把登录信息挂到客户名下（表单没填的键用上次运行实际使用的值补齐）。"""
+    if context.store.get_customer(customer_id) is None:
+        raise HTTPException(status_code=404, detail="客户不存在。")
+    values = {
+        key: value.strip()
+        for key, value in payload.credentials.items()
+        if key in ALLOWED_ENV_KEYS and value.strip()
+    }
+    values = {**context.last_run_credentials(username), **values}
+    try:
+        record = context.store.save_credentials(customer_id, values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "saved",
+        "customer_id": customer_id,
+        "credentials": context.store.public_credentials(customer_id),
+        "updated_at": record.get("updated_at", ""),
+    }
+
+
+@app.post("/api/customers/{customer_id}/credentials/clear")
+async def clear_customer_credentials(
+    customer_id: str,
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, Any]:
+    if context.store.get_customer(customer_id) is None:
+        raise HTTPException(status_code=404, detail="客户不存在。")
+    context.store.clear_credentials(customer_id)
+    return {"status": "cleared", "customer_id": customer_id}
 
 
 @app.post("/api/tasks/{task_id}/{flow}/code")

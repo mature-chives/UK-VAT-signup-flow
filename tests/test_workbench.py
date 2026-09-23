@@ -1,3 +1,4 @@
+import json
 import asyncio
 import tempfile
 import unittest
@@ -337,6 +338,99 @@ class AutomationRoutingTests(unittest.TestCase):
         self.assertEqual(started["user"], "alice")
         # 没有勾选任何身份证明文件也不会报错，资料取任务上选的客户字段。
         self.assertEqual(started["values"], {"business_name": "Example Ltd", "vat_number": "GB123456789"})
+
+    def test_customer_credentials_are_stored_and_reused(self) -> None:
+        task = self._task("uk-eori-register")
+        customer_id = task["customer_id"]
+        context.store.save_credentials(
+            customer_id,
+            {
+                "HMRC_EMAIL": "client@example.test",
+                "HMRC_USER_ID": "123456789012",
+                "HMRC_PASSWORD": "pw-from-store",
+                "HMRC_MFA_PHONE": "13900000000",
+            },
+        )
+        public = context.store.public_credentials(customer_id)
+        self.assertTrue(public["saved"])
+        self.assertEqual(public["user_id"], "12********12")
+        self.assertTrue(public["has_password"])
+        self.assertNotIn("pw-from-store", json.dumps(public, ensure_ascii=False))
+        self.assertEqual(
+            context.store.credentials_path.stat().st_mode & 0o777, 0o600
+        )
+
+        started: dict[str, object] = {}
+
+        class StubManager:
+            identity_documents_required = 0
+
+            def start(self, username: str, request: object) -> None:
+                started["creds"] = dict(request.credentials)
+
+        context.jobs["uk_eori"] = StubManager()
+        asyncio.run(
+            start_automation(
+                task["id"],
+                "uk-eori",
+                UkVatStartRequest(extracted_confirmed=True),
+                "alice",
+                None,
+            )
+        )
+        # 表单留空时用客户已保存的登录信息。
+        self.assertEqual(started["creds"]["HMRC_PASSWORD"], "pw-from-store")
+        self.assertEqual(started["creds"]["HMRC_USER_ID"], "123456789012")
+
+        # 表单里填的值优先于客户存档。
+        context.task_owners.pop(task["id"], None)
+        asyncio.run(
+            start_automation(
+                task["id"],
+                "uk-eori",
+                UkVatStartRequest(
+                    extracted_confirmed=True,
+                    credentials={"HMRC_PASSWORD": "typed-now"},
+                ),
+                "alice",
+                None,
+            )
+        )
+        self.assertEqual(started["creds"]["HMRC_PASSWORD"], "typed-now")
+
+    def test_captured_gateway_user_id_is_attached_to_the_customer(self) -> None:
+        task = self._task("uk-eori-register")
+
+        class StubManager:
+            def snapshot(self, username: str) -> dict:
+                return {
+                    "status": "running",
+                    "message": "正在建号",
+                    "gateway_user_id": "123456789012",
+                }
+
+            def last_run_credentials(self, username: str) -> dict:
+                return {
+                    "HMRC_EMAIL": "client@example.test",
+                    "HMRC_PASSWORD": "pw-just-created",
+                }
+
+        context.jobs["uk_eori"] = StubManager()
+        context.task_owners[task["id"]] = "alice"
+        _sync_automation_task(context.store.get_task(task["id"]))
+        stored = context.store.get_credentials(task["customer_id"])
+        self.assertEqual(stored["HMRC_USER_ID"], "123456789012")
+        self.assertEqual(stored["HMRC_PASSWORD"], "pw-just-created")
+        self.assertEqual(stored["HMRC_EMAIL"], "client@example.test")
+
+    def test_customer_credentials_can_be_cleared(self) -> None:
+        task = self._task("uk-eori-register")
+        context.store.save_credentials(task["customer_id"], {"HMRC_PASSWORD": "pw"})
+        context.store.clear_credentials(task["customer_id"])
+        self.assertEqual(context.store.get_credentials(task["customer_id"]), {})
+        self.assertFalse(
+            context.store.public_credentials(task["customer_id"])["saved"]
+        )
 
 
 if __name__ == "__main__":

@@ -356,6 +356,18 @@ class JobManager:
         """新建 Government Gateway 账号后，把 HMRC 显示的 User ID 记到会话里。"""
         session.gateway_user_id = str(user_id).strip()
 
+    def last_run_credentials(self, username: str) -> dict[str, str]:
+        """上一次运行实际使用的登录信息（含新建的 Gateway User ID）。
+
+        只给服务端内部使用（例如工作台按客户落库），不经过状态接口。
+        """
+        session = self.session(username)
+        with self._lock:
+            values = dict(session.last_credentials)
+            if session.gateway_user_id:
+                values["HMRC_USER_ID"] = session.gateway_user_id
+        return {key: value for key, value in values.items() if str(value).strip()}
+
     def save_credentials_to_env(self, username: str) -> Path:
         """把上次运行的登录信息（含新建的 Gateway User ID）写回 .env。"""
         session = self.session(username)

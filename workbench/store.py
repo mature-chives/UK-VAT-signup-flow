@@ -13,6 +13,17 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# 允许按客户保存的 HMRC 登录信息（其它键一律不收）。
+CREDENTIAL_KEYS = ("HMRC_EMAIL", "HMRC_USER_ID", "HMRC_PASSWORD", "HMRC_MFA_PHONE")
+
+
+def _mask(value: str) -> str:
+    text = str(value)
+    if len(text) <= 4:
+        return "*" * len(text)
+    return f"{text[:2]}{'*' * (len(text) - 4)}{text[-2:]}"
+
+
 def _write_private(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -35,6 +46,7 @@ class WorkbenchStore:
         self.root.chmod(0o700)
         self.customers_path = root / "customers.json"
         self.tasks_path = root / "tasks.json"
+        self.credentials_path = root / "credentials.json"
         self.files_root = root / "files"
         self.files_root.mkdir(parents=True, exist_ok=True)
         self.files_root.chmod(0o700)
@@ -164,6 +176,70 @@ class WorkbenchStore:
             if item.get("id") == file_id:
                 return item
         return None
+
+    # ---- 按客户的 HMRC 登录信息（0600，只服务本机自动化）----
+
+    def get_credentials(self, customer_id: str) -> dict[str, str]:
+        with self._lock:
+            record = self._load(self.credentials_path, "credentials").get(customer_id)
+        values = (record or {}).get("values", {})
+        return {
+            key: str(value)
+            for key, value in dict(values).items()
+            if key in CREDENTIAL_KEYS and str(value).strip()
+        }
+
+    def save_credentials(
+        self, customer_id: str, values: dict[str, str]
+    ) -> dict[str, Any]:
+        """把登录信息挂到客户上；只接收白名单键，空值忽略。"""
+        clean = {
+            key: str(value).strip()
+            for key, value in values.items()
+            if key in CREDENTIAL_KEYS and str(value).strip()
+        }
+        if not clean:
+            raise ValueError("没有可保存的登录信息。")
+        with self._lock:
+            items = self._load(self.credentials_path, "credentials")
+            existing = items.get(customer_id) or {}
+            merged = {**dict(existing.get("values", {})), **clean}
+            record = {
+                "customer_id": customer_id,
+                "values": merged,
+                "updated_at": _now(),
+            }
+            items[customer_id] = record
+            self._save(self.credentials_path, "credentials", items)
+        return dict(record)
+
+    def clear_credentials(self, customer_id: str) -> None:
+        with self._lock:
+            items = self._load(self.credentials_path, "credentials")
+            if customer_id in items:
+                del items[customer_id]
+                self._save(self.credentials_path, "credentials", items)
+
+    def public_credentials(self, customer_id: str) -> dict[str, Any]:
+        """给界面看的脱敏信息：只暴露是否保存、掩码后的 User ID 和更新时间。"""
+        with self._lock:
+            record = self._load(self.credentials_path, "credentials").get(customer_id)
+        values = dict((record or {}).get("values", {}))
+        if not values:
+            return {
+                "saved": False,
+                "user_id": "",
+                "email": "",
+                "has_password": False,
+                "updated_at": "",
+            }
+        return {
+            "saved": True,
+            "user_id": _mask(values.get("HMRC_USER_ID", "")),
+            "email": values.get("HMRC_EMAIL", ""),
+            "has_password": bool(values.get("HMRC_PASSWORD", "")),
+            "updated_at": str((record or {}).get("updated_at", "")),
+        }
 
     def list_tasks(self) -> list[dict[str, Any]]:
         with self._lock:

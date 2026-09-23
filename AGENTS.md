@@ -114,7 +114,7 @@ python scripts/check_flow_coverage.py vat-config.test.json
 
 ## 安全边界（修改代码时必须保持）
 
-- **凭据只经环境变量/内存传入，不写进配置和日志**：Government Gateway 用户名/密码/MFA 通过进程环境变量（含项目根目录 `.env`，权限 0600、git 忽略）或内存 dict 传入；多用户场景（`VatAutomation(credentials=...)`）显式传 dict 以避免密码被 Chrome 子进程继承。密码和验证码不写入流程配置、状态接口或审计日志（审计里只留掩码）。新账号的 Gateway User ID 与所用密码可经网页「保存登录信息到 .env」按钮显式写回 `.env`，属于本机私密文件。
+- **凭据只经环境变量/内存/本机私有存储传入，不写进流程配置和日志**：Government Gateway 用户名/密码/MFA 通过进程环境变量（含项目根目录 `.env`，权限 0600、git 忽略）、内存 dict，或工作台按客户保存的 `workbench-data/credentials.json`（0600、git 忽略）传入；多用户场景（`VatAutomation(credentials=...)`）显式传 dict 以避免密码被 Chrome 子进程继承。密码和验证码不写入流程配置、状态接口或审计日志（审计里只留掩码），界面只显示掩码后的 User ID。
 - **人工确认后才提交**：到达 `Check your answers` 保存整页复核 PDF 并暂停；只有网页用户明确勾选确认后才点击 `Confirm and submit`；暂停与复核均有 30 分钟超时。
 - **凭据之外的密钥**放项目根目录 `.env`（git 忽略，模板 `.env.example`，目前用于百度翻译）。
 - 动作白名单 `SAFE_ACTIONS`（runner.py）：只允许 `Save and continue` 等安全按钮；未知按钮/缺失必填字段/`action: stop` 立即停止，保存截图与 `artifacts/current-page.json`。

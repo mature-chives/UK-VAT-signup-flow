@@ -176,14 +176,15 @@
         <input id="hmrc-password" type="password" autocomplete="new-password">
         <label for="hmrc-user-id">Gateway User ID（用 Government Gateway 登录时填，最多 12 位）</label>
         <input id="hmrc-user-id" autocomplete="off">
-        <p class="hint">新客户走「Create new sign in details」建号，只需要邮箱、手机、密码；客户已有账号时才填 Gateway User ID。登录信息只记在服务器本机内存里，失败重试不用再输密码，重启服务即失效。</p>
+        <p class="hint">新客户走「Create new sign in details」建号，只需要邮箱、手机、密码；客户已有账号时才填 Gateway User ID。表单留空时会用该客户已保存的登录信息（其次 `.env`），失败重试不用再输密码。</p>
         <label class="check"><input id="extracted-ok" type="checkbox"> 已检查客户资料，确认无误</label>
         <div class="actions">
           <button id="start-automation" type="button" disabled>启动自动化</button>
-          <button id="clear-credentials" class="secondary" type="button">清除已记住的登录信息</button>
-          <button id="save-credentials" class="secondary" type="button" hidden>保存登录信息到 .env</button>
+          <button id="save-customer-credentials" class="secondary" type="button">保存登录信息到该客户</button>
+          <button id="clear-credentials" class="secondary" type="button">清除本机记住的登录信息</button>
         </div>
         <p class="hint" id="gateway-hint" hidden></p>
+        <p class="hint" id="customer-credential-hint"></p>
       </div>
       <div id="otp">
         <strong>请输入验证码</strong>
@@ -562,6 +563,22 @@ function renderCustomerDetail() {
         </label>`
       ).join("")
     : `<p class="hint">暂无结构化字段，可先解析授权表。</p>`;
+  renderCustomerCredentials(customer);
+}
+
+function renderCustomerCredentials(customer) {
+  const info = (customer && customer.credentials) || {};
+  if (!info.saved) {
+    $("customer-credential-hint").textContent = currentCustomerId
+      ? "该客户还没有保存 HMRC 登录信息：跑一次注册（建号成功会自动保存），或填好上面的登录信息后点「保存登录信息到该客户」。"
+      : "";
+    return;
+  }
+  $("customer-credential-hint").textContent =
+    `该客户已保存 HMRC 登录信息：User ID ${info.user_id || "（无）"}` +
+    `${info.email ? "，邮箱 " + info.email : ""}` +
+    `${info.has_password ? "，密码已保存" : "，但没有保存密码"}` +
+    `${info.updated_at ? "（" + formatWhen(info.updated_at) + "）" : ""}。`;
 }
 function matchesFilter(item) {
   if (taskFilter === "live") return ["in_progress", "waiting", "reviewing"].includes(item.status);
@@ -753,9 +770,8 @@ function showAutomationStatus(task) {
   $("otp").style.display = snap.status === "waiting_code" ? "block" : "none";
   const gatewayId = snap.gateway_user_id || "";
   $("gateway-hint").hidden = !gatewayId;
-  $("save-credentials").hidden = !gatewayId;
   if (gatewayId) {
-    $("gateway-hint").textContent = `新建的 Gateway User ID：${gatewayId}。保存到 .env 后，下次可直接用 Government Gateway 登录。`;
+    $("gateway-hint").textContent = `新建的 Gateway User ID：${gatewayId}（会自动挂到该客户名下，下次可直接用 Government Gateway 登录）。`;
   }
 }
 
@@ -998,15 +1014,26 @@ $("clear-credentials").addEventListener("click", async () => {
     $("run-status").textContent = error.message;
   }
 });
-$("save-credentials").addEventListener("click", async () => {
+$("save-customer-credentials").addEventListener("click", async () => {
+  if (!currentCustomerId) {
+    $("run-status").style.display = "block";
+    $("run-status").className = "status blocked";
+    $("run-status").textContent = "请先选择客户。";
+    return;
+  }
+  const credentials = {
+    HMRC_EMAIL: $("hmrc-email").value, HMRC_USER_ID: $("hmrc-user-id").value,
+    HMRC_PASSWORD: $("hmrc-password").value, HMRC_MFA_PHONE: $("hmrc-phone").value
+  };
   try {
-    const body = await api("/api/credentials/save", {
+    await api(`/api/customers/${currentCustomerId}/credentials/save`, {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({})
+      body: JSON.stringify({credentials})
     });
     $("run-status").style.display = "block";
     $("run-status").className = "status";
-    $("run-status").textContent = `已保存到 ${body.path}；下次用 Government Gateway 直接登录。`;
+    $("run-status").textContent = "已把登录信息保存到该客户。";
+    await refresh();
   } catch (error) {
     $("run-status").style.display = "block";
     $("run-status").className = "status blocked";
