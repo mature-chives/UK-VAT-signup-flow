@@ -925,6 +925,40 @@ class CredentialMemoryTests(unittest.TestCase):
         self.assertTrue(snapshot["credentials_stored"]["saved"])
         self.assertNotIn("fixed-pw", json.dumps(snapshot, ensure_ascii=False))
 
+    def test_stored_account_switches_to_government_gateway(self) -> None:
+        """客户已存 GG 账号时自动用 Government Gateway 登录，显式选择仍优先。"""
+        self._start(
+            {"project_code": "AB223322"},
+            HMRC_PASSWORD="fixed-pw",
+            HMRC_MFA_PHONE="13900000000",
+        )
+        session = self.manager.session("alice")
+        # 抓到 User ID 会立刻落库（不需要等流程结束）。
+        self.manager.remember_gateway_user_id(session, "123456789012")
+        self.assertEqual(
+            self.manager.credential_store.get("AB223322")["HMRC_USER_ID"],
+            "123456789012",
+        )
+
+        self._start({"project_code": "AB223322"})
+        self.assertEqual(
+            self.manager.runs[-1]["HMRC_SIGN_IN_METHOD"], "Government Gateway"
+        )
+        self.assertEqual(self.manager.runs[-1]["HMRC_USER_ID"], "123456789012")
+
+        # 表单显式选"新建账号"时以表单为准。
+        self._start(
+            {"project_code": "AB223322"},
+            HMRC_SIGN_IN_METHOD="Create new sign in details",
+        )
+        self.assertEqual(
+            self.manager.runs[-1]["HMRC_SIGN_IN_METHOD"], "Create new sign in details"
+        )
+
+        # 没存过账号的客户仍然走"新建账号"（不自动切 GG）。
+        self._start({"project_code": "ZZ000000"}, HMRC_PASSWORD="fixed-pw")
+        self.assertNotIn("HMRC_SIGN_IN_METHOD", self.manager.runs[-1])
+
     def test_clear_credentials_forgets_password(self) -> None:
         self._start(HMRC_PASSWORD="secret-1")
         self.manager._set_terminal_state(

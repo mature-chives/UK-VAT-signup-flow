@@ -814,10 +814,15 @@ async function refresh() {
     }
     if (credentialsFromEnv.includes('HMRC_PASSWORD')) $('password').placeholder = '留空即用 .env 里的固定密码';
     showFlow(state.flow_name || '', state.config || '');
-    if (!signInMethodPreset && state.sign_in_method) {
-      // 按流程配置预选登录方式（EORI 默认用 Government Gateway 登录已有账号）。
-      $('method').value = state.sign_in_method;
+    if (!signInMethodPreset && (stored.saved || state.sign_in_method)) {
+      // 该客户已存过 GG 账号就预选 Government Gateway，否则用流程配置的默认方式。
+      $('method').value = stored.saved ? 'Government Gateway' : state.sign_in_method;
       signInMethodPreset = true;
+      if (stored.saved) {
+        $('method-hint').textContent =
+          '该客户已有 Government Gateway 账号，登录方式已自动选为 Government Gateway；'
+          + '要重新建号请改成 Create new sign in details。';
+      }
     }
     const required = Number(state.identity_required ?? 3);
     if (required !== identityRequired) {

@@ -321,12 +321,16 @@ class JobManager:
                 if session.saved_credentials_key == session.credential_key
                 else {}
             )
-            credentials = {
-                **env_credentials(ALLOWED_ENV_KEYS),
-                **remembered,
-                **stored,
-                **provided,
-            }
+            env_values = env_credentials(ALLOWED_ENV_KEYS)
+            credentials = {**env_values, **remembered, **stored, **provided}
+            # 该客户已经存过 Government Gateway 账号时默认用它登录（建号那一步已经做过），
+            # 表单或 .env 显式指定登录方式时以它们为准。
+            if (
+                "HMRC_SIGN_IN_METHOD" not in provided
+                and "HMRC_SIGN_IN_METHOD" not in env_values
+                and credentials.get("HMRC_USER_ID")
+            ):
+                credentials["HMRC_SIGN_IN_METHOD"] = "Government Gateway"
             if provided or stored or remembered:
                 session.saved_credentials = dict(credentials)
                 session.saved_credentials_key = session.credential_key
@@ -410,8 +414,9 @@ class JobManager:
         session.saved_credentials_key = self._session_credential_key(session)
 
     def remember_gateway_user_id(self, session: UserSession, user_id: str) -> None:
-        """新建 Government Gateway 账号后，把 HMRC 显示的 User ID 记到会话里。"""
+        """新建 Government Gateway 账号后立刻记下并落库，中途中断也不丢账号。"""
         session.gateway_user_id = str(user_id).strip()
+        self._persist_credentials(session)
 
     def last_run_credentials(self, username: str) -> dict[str, str]:
         """上一次运行实际使用的登录信息（含新建的 Gateway User ID）。
