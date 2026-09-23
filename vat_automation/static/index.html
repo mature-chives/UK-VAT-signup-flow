@@ -110,14 +110,14 @@
         <input id="password" type="password" autocomplete="new-password">
         <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
         <div class="hint" id="credential-hint">登录信息会保存在本机私有存储里（0600），下次启动留空即用。</div>
-        <button id="clear-credentials" class="secondary" type="button" hidden>清除已保存的登录信息</button>
         <div id="gateway-box" hidden>
-          <p class="hint">新建的 Government Gateway User ID：<b id="gateway-user-id"></b>。保存后下次直接用 Government Gateway 登录，不用再手动填。</p>
-          <label for="gateway-user-id-input">核对 / 修改 User ID（保存前请和 HMRC 页面或邮件核对，12 位数字）</label>
+          <p class="hint">新建的 Government Gateway User ID：<b id="gateway-user-id"></b>（HMRC 页面上是两位一组显示，如 33 19 56 57 67 51）。</p>
+          <label for="gateway-user-id-input">核对 / 修改 User ID（12 位数字，保存前请和 HMRC 页面或邮件核对）</label>
           <input id="gateway-user-id-input" autocomplete="off" inputmode="numeric">
-          <button id="save-credentials" class="secondary" type="button">保存我的 HMRC 登录信息</button>
-          <div id="save-credentials-message" class="message"></div>
         </div>
+        <button id="save-credentials" class="secondary" type="button">保存我的 HMRC 登录信息</button>
+        <button id="clear-credentials" class="secondary" type="button" hidden>清除已保存的登录信息</button>
+        <div id="save-credentials-message" class="message"></div>
       </div>
 
       <div class="section" id="identity-section">
@@ -504,6 +504,8 @@ $('save-credentials').addEventListener('click', async () => {
   setMessage('save-credentials-message', '');
   // 允许在保存前手改 User ID（抓取可能被页面里其它数字干扰）。
   const response = await post('/api/credentials/save', {
+    // 解析资料后就知道项目编号，用它作为存储键（和 EORI 那轮对齐）。
+    project_code: (extractedValues.project_code || '').trim(),
     credentials: {
       HMRC_USER_ID: $('gateway-user-id-input').value || $('user-id').value,
       HMRC_EMAIL: $('email').value,
@@ -514,7 +516,13 @@ $('save-credentials').addEventListener('click', async () => {
   const body = await response.json();
   if (!response.ok) { setMessage('save-credentials-message', body.detail || '保存失败', 'error'); return; }
   credentialsStored = true;
-  setMessage('save-credentials-message', '已保存（本机私有存储，0600）；以后登录方式选 Government Gateway，输入框留空即可。', 'ok');
+  const saved = body.credentials || {};
+  setMessage(
+    'save-credentials-message',
+    `已保存${body.key ? '到 ' + body.key : ''}：User ID ${saved.user_id || '（未填）'}`
+      + `${saved.has_password ? '，密码已存' : ''}。本机私有存储（0600），以后输入框留空即用。`,
+    'ok'
+  );
 });
 
 $('send-code').addEventListener('click', async () => {

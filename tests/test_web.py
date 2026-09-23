@@ -1035,6 +1035,30 @@ class CredentialMemoryTests(unittest.TestCase):
             "12********12",
         )
 
+    def test_advanced_settings_can_save_without_any_run(self) -> None:
+        """不跑任务也能保存：高级设置填好后带项目编号保存，直接落到该客户名下。"""
+        saved = self.manager.save_credentials(
+            "alice",
+            {
+                "HMRC_USER_ID": "331956576751",
+                "HMRC_EMAIL": "1143038963@qq.com",
+                "HMRC_PASSWORD": "fixed-pw",
+                "HMRC_MFA_PHONE": "13900000000",
+            },
+            "AB223322",
+        )
+        self.assertEqual(saved["key"], "AB223322")
+        self.assertEqual(saved["credentials"]["user_id"], "33********51")
+        self.assertTrue(saved["credentials"]["has_password"])
+        stored = self.manager.credential_store.get("AB223322")
+        self.assertEqual(stored["HMRC_USER_ID"], "331956576751")
+        # 之后再跑（表单留空）会直接取到这套。
+        self._start({"project_code": "AB223322"})
+        self.assertEqual(self.manager.runs[-1]["HMRC_USER_ID"], "331956576751")
+        self.assertEqual(
+            self.manager.runs[-1]["HMRC_SIGN_IN_METHOD"], "Government Gateway"
+        )
+
     def test_clear_credentials_forgets_password(self) -> None:
         self._start(HMRC_PASSWORD="secret-1")
         self.manager._set_terminal_state(

@@ -99,6 +99,8 @@ class CodeRequest(BaseModel):
 class CredentialSaveRequest(BaseModel):
     # 保存前允许手改的字段（例如核对/修正 Gateway User ID）。
     credentials: dict[str, str] = Field(default_factory=dict)
+    # 该客户的资料袋里解析出来的项目编号；用来当存储键，和 EORI 那轮对齐。
+    project_code: str = Field(default="", max_length=64)
 
 
 class ContinueRequest(BaseModel):
@@ -490,13 +492,17 @@ class JobManager:
         return {key: value for key, value in values.items() if str(value).strip()}
 
     def save_credentials(
-        self, username: str, overrides: Mapping[str, str] | None = None
+        self,
+        username: str,
+        overrides: Mapping[str, str] | None = None,
+        key: str = "",
     ) -> dict[str, str]:
         """把上次运行实际使用的登录信息（含新建的 Gateway User ID）存到本机。"""
         session = self.session(username)
         # 注意：last_run_credentials 自己会加锁，这里不能再持锁，否则死锁。
         if session.state["status"] in ACTIVE_STATES:
             raise RuntimeError("自动化运行中不能保存登录信息。")
+        store_key = str(key).strip() or self._session_credential_key(session)
         values = {
             **self.last_run_credentials(username),
             **{
@@ -508,18 +514,19 @@ class JobManager:
         if not values.get("HMRC_PASSWORD"):
             raise ValueError("还没有可保存的密码：请先填一次密码并启动过任务。")
         try:
-            record = self.credential_store.save(
-                self._session_credential_key(session), values
-            )
+            record = self.credential_store.save(store_key, values)
         except OSError as exc:
             raise RuntimeError(
                 f"无法写入 {self.credential_store.path}：{exc}"
             ) from exc
         session.saved_credentials = dict(values)
-        session.saved_credentials_key = self._session_credential_key(session)
+        session.saved_credentials_key = store_key
+        session.credential_key = store_key
         return {
             "status": "saved",
             "path": str(self.credential_store.path),
+            "key": store_key,
+            "credentials": self.credential_store.public(store_key),
             "updated_at": str(record.get("updated_at", "")),
         }
 
@@ -1190,7 +1197,9 @@ async def save_credentials(
     """把上次运行的登录信息保存到本机私有存储，之后启动不用再手输。"""
     try:
         overrides = dict(request.credentials) if request is not None else {}
-        return context.jobs().save_credentials(username, overrides)
+        project_code = (request.project_code if request is not None else "").strip()
+        result = context.jobs().save_credentials(username, overrides, project_code)
+        return {**result, "key": project_code or result.get("key", "")}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (OSError, RuntimeError) as exc:
