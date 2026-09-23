@@ -201,6 +201,9 @@ class JobManager:
         self._lock = threading.Lock()
         self._sessions: dict[str, UserSession] = {}
         self._busy_with: str | None = None
+        # "最近操作"在内存里为空时，用审计日志的最近记录兜底（带文件变化缓存）。
+        self._events_cache: list[dict[str, Any]] = []
+        self._events_cache_key: tuple[str, int, int, str, int] | None = None
         # 流程名和身份证明数量都由流程配置决定（VAT 三份；EORI 不需要上传，为 0）。
         self.flow_name = ""
         self.default_sign_in_method = ""
@@ -213,6 +216,50 @@ class JobManager:
     def env_credential_keys(self) -> list[str]:
         """`.env`/进程环境里可用的凭据键名（只返回名字，不返回值）。"""
         return sorted(env_credentials(ALLOWED_ENV_KEYS))
+
+    def recent_audit_events(self, username: str, limit: int = 20) -> list[dict[str, Any]]:
+        """服务重启/新任务开始后，用审计日志里的最近记录填充"最近操作"。
+
+        审计里只记事件、URL 和页面标题，不含填写值，所以可以安全回显。
+        """
+        try:
+            settings = load_settings(self.config_path)
+            path = settings.artifacts_dir / "audit.jsonl"
+            stat = path.stat()
+        except (OSError, ValueError):
+            return []
+        cache_key = (str(path), stat.st_mtime_ns, stat.st_size, username, limit)
+        with self._lock:
+            if self._events_cache_key == cache_key:
+                return list(self._events_cache)
+            self._events_cache_key = cache_key
+            self._events_cache = []
+        events: list[dict[str, Any]] = []
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                for line in stream:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except ValueError:
+                        continue
+                    if record.get("user") != username:
+                        continue
+                    events.append(
+                        {
+                            "event": str(record.get("event", "")),
+                            "heading": str(record.get("heading", "")),
+                            "text": str(record.get("text", "")),
+                        }
+                    )
+        except OSError:
+            return []
+        events = events[-limit:]
+        with self._lock:
+            self._events_cache = list(events)
+        return list(events)
 
     @staticmethod
     def credential_key_for(session: UserSession, extracted_values: Mapping[str, str]) -> str:
@@ -256,9 +303,10 @@ class JobManager:
         session = self.session(username)
         with self._lock:
             busy = self._busy_with
-            return {
+            events = list(session.state["events"])
+            payload = {
                 **session.state,
-                "events": list(session.state["events"]),
+                "events": events,
                 "identity_documents": len(session.identity_documents),
                 "identity_required": self.identity_documents_required,
                 "credentials_saved": bool(session.saved_credentials)
@@ -284,6 +332,11 @@ class JobManager:
                 "busy_with": busy if busy and busy != session.username else "",
                 "config": self.config_path.name,
             }
+        # 内存里还没有事件（刚重启或还没跑过任务）时，用审计日志兜底显示。
+        # 注意要放在锁外面调用，recent_audit_events 自己会加锁。
+        if not events:
+            payload["events"] = self.recent_audit_events(username)
+        return payload
 
     def start(self, username: str, request: StartRequest) -> None:
         session = self.session(username)

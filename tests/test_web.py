@@ -873,6 +873,43 @@ class CredentialMemoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "密码"):
             self.manager.save_credentials("alice")
 
+    def test_recent_operations_fall_back_to_audit_log(self) -> None:
+        """服务重启后内存里没有事件，"最近操作"用审计日志兜底（按用户过滤）。"""
+        artifacts = self.config_path.parent / "artifacts"
+        artifacts.mkdir(parents=True, exist_ok=True)
+        (artifacts / "audit.jsonl").write_text(
+            "\n".join(
+                json.dumps(record, ensure_ascii=False)
+                for record in (
+                    {
+                        "time": "t1",
+                        "event": "page",
+                        "user": "alice",
+                        "heading": "Enter your email address",
+                    },
+                    {
+                        "time": "t2",
+                        "event": "gateway-user-id-captured",
+                        "user": "alice",
+                        "user_id": "33********51",
+                    },
+                    {"time": "t3", "event": "page", "user": "bob", "heading": "别人的"},
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        events = self.manager.snapshot("alice")["events"]
+        self.assertEqual(
+            [item["event"] for item in events], ["page", "gateway-user-id-captured"]
+        )
+        self.assertEqual(events[0]["heading"], "Enter your email address")
+        # 只回显事件名/标题/文本，审计里的其它字段（含掩码 ID）不回显。
+        self.assertNotIn("33********51", json.dumps(events, ensure_ascii=False))
+        self.assertEqual(
+            self.manager.snapshot("bob")["events"][0]["heading"], "别人的"
+        )
+
     def test_credentials_follow_the_project_code(self) -> None:
         """VAT 注册建的 GG 账号按项目编号存，下次同项目的 EORI 注册能取到。"""
         self._start(
