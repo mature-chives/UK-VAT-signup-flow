@@ -63,6 +63,8 @@ GATEWAY_USER_ID_PATTERN = re.compile(r"(?<![\dA-Za-z@])(\d{12})(?![\dA-Za-z@])")
 GATEWAY_USER_ID_FALLBACK_PATTERN = re.compile(
     r"(?<![\dA-Za-z@])(\d{10,11})(?![\dA-Za-z@])"
 )
+# 有些页面把 ID 按 4 位分组显示（1234 5678 9012），比对前先去掉数字之间的分隔符。
+GROUPED_DIGITS_PATTERN = re.compile(r"(?<=\d)[ \t\u00a0-](?=\d)")
 # 网络抖动时退回上一页重试的次数（单次错误），以及整个任务允许的恢复总次数。
 BROWSER_ERROR_RETRIES = 2
 BROWSER_ERROR_RECOVERY_LIMIT = 3
@@ -349,18 +351,24 @@ class VatAutomation:
         审计日志只记掩码后的值，完整值放内存交给网页/工作台保存（如写进 .env）。
         """
         if GATEWAY_USER_ID_HEADING not in normalize(heading):
-            return
+            # 页面标题可能改文案，注册确认页的 URL 也认。
+            if "/registration/confirmation/" not in page.url:
+                return
         try:
-            text = await page.locator("main").inner_text()
+            text = await page.locator("body").inner_text()
         except Exception:
             return
-        haystack = text or ""
+        haystack = GROUPED_DIGITS_PATTERN.sub("", text or "")
         match = GATEWAY_USER_ID_PATTERN.search(haystack)
         matched = "12-digit"
         if match is None:
             match = GATEWAY_USER_ID_FALLBACK_PATTERN.search(haystack)
             matched = "fallback"
         if match is None:
+            # 抓不到就留证据：HMRC 有时只在页面上提示"已发邮件"，
+            # User ID 只出现在邮箱里，这时需要人工抄一下。
+            await self._audit("gateway-user-id-not-found", url=page.url)
+            await self._dump_gateway_user_id_page(text or "")
             return
         self.gateway_user_id = match.group(0)
         await self._audit(
@@ -373,6 +381,18 @@ class VatAutomation:
             result = self.gateway_user_id_provider(self.gateway_user_id)
             if result is not None:
                 await result
+
+    async def _dump_gateway_user_id_page(self, text: str) -> None:
+        """把建号确认页文本存到 artifacts（0600，本机私有），便于事后适配抓取规则。"""
+        if not text.strip():
+            return
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        target = self.settings.artifacts_dir / f"{stamp}-gateway-user-id-page.txt"
+        try:
+            target.write_text(text, encoding="utf-8")
+            target.chmod(0o600)
+        except OSError:
+            return
 
     async def _handle_auth(self, page: Any, heading: str) -> None:
         """自动处理凭据和安全方式，仅验证码由用户即时输入。"""

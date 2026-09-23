@@ -1548,18 +1548,23 @@ class GatewayUserIdCaptureTests(unittest.TestCase):
         return runner
 
     @staticmethod
-    def _page(text: str) -> object:
+    def _page(
+        text: str,
+        url: str = "https://www.access.service.gov.uk/registration/confirmation/x",
+    ) -> object:
         class Locator:
             async def inner_text(self) -> str:
                 return text
 
         class Page:
-            url = "https://www.access.service.gov.uk/registration/confirmation/x"
+            url = ""
 
             def locator(self, _selector: str) -> Locator:
                 return Locator()
 
-        return Page()
+        page = Page()
+        page.url = url
+        return page
 
     def test_user_id_is_captured_and_audited_masked(self) -> None:
         runner = self._runner()
@@ -1612,15 +1617,52 @@ class GatewayUserIdCaptureTests(unittest.TestCase):
         self.assertEqual(runner.gateway_user_id, "1143038963")
         self.assertEqual(runner.events[0]["matched"], "fallback")
 
+    def test_grouped_digits_are_still_captured(self) -> None:
+        runner = self._runner()
+        asyncio.run(
+            runner._capture_gateway_user_id(
+                self._page("Your Government Gateway user ID is:\n1234 5678 9012\n"),
+                "Your Government Gateway user ID is:",
+            )
+        )
+        self.assertEqual(runner.gateway_user_id, "123456789012")
+
+    def test_page_without_user_id_is_flagged(self) -> None:
+        """HMRC 只发邮件、页面上没有 ID 时要留下证据并提示人工填写。"""
+        runner = self._runner()
+        page = self._page(
+            "Your Government Gateway user ID is:\n"
+            "We have sent it to 1143038963@qq.com\n"
+        )
+        asyncio.run(
+            runner._capture_gateway_user_id(page, "Your Government Gateway user ID is:")
+        )
+        self.assertEqual(runner.gateway_user_id, "")
+        self.assertEqual(runner.events[0]["event"], "gateway-user-id-not-found")
+
     def test_other_pages_are_ignored(self) -> None:
         runner = self._runner()
         asyncio.run(
             runner._capture_gateway_user_id(
-                self._page("123456789012"), "Enter your email address"
+                self._page(
+                    "123456789012",
+                    "https://www.access.service.gov.uk/registration/email",
+                ),
+                "Enter your email address",
             )
         )
         self.assertEqual(runner.gateway_user_id, "")
         self.assertEqual(runner.events, [])
+
+    def test_confirmation_url_still_captures_when_heading_changes(self) -> None:
+        """HMRC 改标题文案时，注册确认页的 URL 仍能识别。"""
+        runner = self._runner()
+        asyncio.run(
+            runner._capture_gateway_user_id(
+                self._page("你的用户 ID 是：123456789012"), "Something else"
+            )
+        )
+        self.assertEqual(runner.gateway_user_id, "123456789012")
 
     def test_masked_value_hides_the_middle(self) -> None:
         self.assertEqual(_masked_value("123456789012"), "12********12")
