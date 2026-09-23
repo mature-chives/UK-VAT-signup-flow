@@ -109,11 +109,11 @@
         <label for="password">HMRC 登录密码</label>
         <input id="password" type="password" autocomplete="new-password">
         <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
-        <div class="hint" id="credential-hint">登录信息只记在服务器本机内存里，失败重试不用再输密码；重启服务即失效。</div>
-        <button id="clear-credentials" class="secondary" type="button" hidden>清除已记住的登录信息</button>
+        <div class="hint" id="credential-hint">登录信息会保存在本机私有存储里（0600），下次启动留空即用。</div>
+        <button id="clear-credentials" class="secondary" type="button" hidden>清除已保存的登录信息</button>
         <div id="gateway-box" hidden>
-          <p class="hint">新建的 Government Gateway User ID：<b id="gateway-user-id"></b>。保存到 <code id="env-path-label">.env</code> 后，下次直接用 Government Gateway 登录，不用再手动填。</p>
-          <button id="save-credentials" class="secondary" type="button">保存为本机默认登录信息（写 .env）</button>
+          <p class="hint">新建的 Government Gateway User ID：<b id="gateway-user-id"></b>。保存后下次直接用 Government Gateway 登录，不用再手动填。</p>
+          <button id="save-credentials" class="secondary" type="button">保存我的 HMRC 登录信息</button>
           <div id="save-credentials-message" class="message"></div>
         </div>
       </div>
@@ -202,6 +202,7 @@ let identityCount = 0;
 let identityRequired = 3;
 let credentialsRemembered = false;
 let credentialsFromEnv = [];
+let credentialsStored = false;
 let signInMethodPreset = false;
 let extractionConfirmed = false;
 let currentStatus = 'idle';
@@ -454,7 +455,7 @@ $('start-form').addEventListener('submit', async event => {
   if (!extractedValues.full_name) { setMessage('form-error', '资料中缺少负责人姓名，请先解析文档或在提取结果中补充。', 'error'); return; }
   if (identityCount < identityRequired) { setMessage('form-error', `请先保存 ${identityRequired} 份身份证明文件。`, 'error'); return; }
   const method = $('method').value;
-  const hasDefaultCredentials = credentialsRemembered || credentialsFromEnv.length > 0;
+  const hasDefaultCredentials = credentialsStored || credentialsRemembered || credentialsFromEnv.length > 0;
   if (!hasDefaultCredentials && method === 'Government Gateway') {
     if (!$('user-id').value || !$('password').value) {
       setMessage('form-error', 'Government Gateway 登录要填 Gateway User ID 和密码；客户还没有账号请把登录方式改成“Create new sign in details”。', 'error'); return;
@@ -483,9 +484,10 @@ $('clear-credentials').addEventListener('click', async () => {
   const body = await response.json();
   if (!response.ok) { setMessage('form-error', body.detail || '清除失败', 'error'); return; }
   credentialsRemembered = false;
+  credentialsStored = false;
   $('password').value = '';
   $('clear-credentials').hidden = true;
-  $('credential-hint').textContent = '已清除记住的登录信息，下次启动请重新填写邮箱和密码。';
+  $('credential-hint').textContent = '已清除保存的登录信息，下次启动请重新填写邮箱和密码。';
 });
 
 $('save-credentials').addEventListener('click', async () => {
@@ -493,7 +495,8 @@ $('save-credentials').addEventListener('click', async () => {
   const response = await post('/api/credentials/save', {});
   const body = await response.json();
   if (!response.ok) { setMessage('save-credentials-message', body.detail || '保存失败', 'error'); return; }
-  setMessage('save-credentials-message', `已保存到 ${body.path}；以后登录方式选 Government Gateway，留空即可。`, 'ok');
+  credentialsStored = true;
+  setMessage('save-credentials-message', '已保存（本机私有存储，0600）；以后登录方式选 Government Gateway，输入框留空即可。', 'ok');
 });
 
 $('send-code').addEventListener('click', async () => {
@@ -780,10 +783,20 @@ async function refresh() {
     credentialsFromEnv = state.credentials_env || [];
     $('gateway-box').hidden = !state.gateway_user_id;
     $('gateway-user-id').textContent = state.gateway_user_id || '';
-    if (state.env_path) $('env-path-label').textContent = state.env_path;
-    if (credentialsFromEnv.length) {
+    const stored = state.credentials_stored || {};
+    if (stored.saved) {
+      credentialsStored = true;
+      $('credential-hint').textContent =
+        `已保存你的 HMRC 登录信息：User ID ${stored.user_id || '（无）'}`
+        + `${stored.email ? '，邮箱 ' + stored.email : ''}`
+        + `${stored.has_password ? '，密码已保存' : '，但没有保存密码'}`
+        + `。输入框留空即用。`;
+    } else {
+      credentialsStored = false;
+    }
+    if (!stored.saved && credentialsFromEnv.length) {
       $('credential-hint').textContent = `已从 .env 读取：${credentialsFromEnv.join('、')}（对应输入框可以留空）。`;
-    } else if (credentialsRemembered) {
+    } else if (!stored.saved && credentialsRemembered) {
       $('credential-hint').textContent = '已记住上次的 HMRC 登录信息（仅本机内存）：失败重试不用再输密码，重启服务即失效。';
     }
     showFlow(state.flow_name || '', state.config || '');

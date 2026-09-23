@@ -13,6 +13,7 @@ from starlette.requests import Request
 
 from vat_automation.auth import SessionSigner, UserStore
 from vat_automation.config import PageRule, Settings
+from vat_automation.credential_store import CredentialStore
 from vat_automation.web import (
     CSRF_COOKIE,
     CSRF_HEADER,
@@ -755,6 +756,7 @@ class CredentialMemoryTests(unittest.TestCase):
             json.dumps({"identity_documents_required": 0}), encoding="utf-8"
         )
         self.env_file = base / ".env"
+        self.credentials_file = base / "hmrc-credentials.json"
 
         class StubJobManager(JobManager):
             runs: list[dict[str, str]] = []
@@ -770,8 +772,10 @@ class CredentialMemoryTests(unittest.TestCase):
                 self.runs.append(dict(credentials))
 
         StubJobManager.runs = []
-        # 用临时 .env，避免测试写到项目根目录的真实文件。
-        self.manager = StubJobManager(self.config_path, self.env_file)
+        # 用临时 .env 与临时凭据存储，避免测试写到项目根目录的真实文件。
+        self.manager = StubJobManager(
+            self.config_path, self.env_file, CredentialStore(self.credentials_file)
+        )
 
     def _start(self, **credentials: str) -> None:
         self.manager.start(
@@ -824,7 +828,7 @@ class CredentialMemoryTests(unittest.TestCase):
             self._start(HMRC_PASSWORD="typed")
         self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "typed")
 
-    def test_save_credentials_writes_user_id_and_password_to_env(self) -> None:
+    def test_saved_credentials_are_reused_from_the_store(self) -> None:
         self._start(
             HMRC_EMAIL="a@example.test",
             HMRC_PASSWORD="secret-1",
@@ -836,29 +840,41 @@ class CredentialMemoryTests(unittest.TestCase):
         self.manager.remember_gateway_user_id(
             self.manager.session("alice"), "123456789012"
         )
-        with patch.dict(os.environ, {}, clear=False):
-            path = self.manager.save_credentials_to_env("alice")
-        self.assertEqual(path, self.env_file.resolve())
-        text = self.env_file.read_text(encoding="utf-8")
-        self.assertIn("HMRC_USER_ID=123456789012", text)
-        self.assertIn("HMRC_PASSWORD=secret-1", text)
-        self.assertIn("HMRC_EMAIL=a@example.test", text)
-        self.assertEqual(self.env_file.stat().st_mode & 0o777, 0o600)
+        saved = self.manager.save_credentials("alice")
+        self.assertEqual(Path(saved["path"]).resolve(), self.credentials_file.resolve())
+        stored = self.manager.credential_store.get("alice")
+        self.assertEqual(stored["HMRC_USER_ID"], "123456789012")
+        self.assertEqual(stored["HMRC_PASSWORD"], "secret-1")
+        self.assertEqual(self.credentials_file.stat().st_mode & 0o777, 0o600)
+        snapshot = self.manager.snapshot("alice")
+        self.assertTrue(snapshot["credentials_stored"]["saved"])
+        self.assertEqual(snapshot["credentials_stored"]["user_id"], "12********12")
+        self.assertNotIn("secret-1", json.dumps(snapshot, ensure_ascii=False))
+        # 清空内存里的记录后，下一次启动仍然能用存下来的凭据。
+        self.manager._set_terminal_state(
+            self.manager.session("alice"), "failed", "网络中断"
+        )
+        self.manager.session("alice").saved_credentials = {}
+        self._start()
+        self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "secret-1")
+        self.assertEqual(self.manager.runs[-1]["HMRC_USER_ID"], "123456789012")
 
     def test_save_without_password_is_rejected(self) -> None:
         self.manager._set_terminal_state(
             self.manager.session("alice"), "failed", "没跑过"
         )
         with self.assertRaisesRegex(ValueError, "密码"):
-            self.manager.save_credentials_to_env("alice")
+            self.manager.save_credentials("alice")
 
     def test_clear_credentials_forgets_password(self) -> None:
         self._start(HMRC_PASSWORD="secret-1")
         self.manager._set_terminal_state(
             self.manager.session("alice"), "failed", "网络中断"
         )
+        self.manager.save_credentials("alice")
         self.manager.clear_credentials("alice")
         self.assertFalse(self.manager.snapshot("alice")["credentials_saved"])
+        self.assertEqual(self.manager.credential_store.get("alice"), {})
         self._start(HMRC_PASSWORD="secret-3")
         self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "secret-3")
 

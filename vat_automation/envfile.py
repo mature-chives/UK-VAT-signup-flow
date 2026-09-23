@@ -1,13 +1,13 @@
-"""项目 `.env` 的读写：加载进程环境、把新账号写回文件。
+"""项目 `.env` 的读取：把 KEY=VALUE 载入进程环境当作默认凭据。
 
 `.env` 已加入 .gitignore，权限 0600，用于放本机凭据（百度翻译、HMRC 登录信息）。
+HMRC 账号本身存在按客户/账号的凭据存储里（`vat_automation/credential_store.py`），
+`.env` 只作为可选的默认值来源。
 """
 
 from __future__ import annotations
 
 import os
-import re
-import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
@@ -88,57 +88,3 @@ def env_credentials(
         for key in keys
         if str(source.get(key) or "").strip()
     }
-
-
-def _encode_env_value(value: str) -> str:
-    """写出安全的 .env 值；含引号或换行的值拒绝写入，避免写坏文件。"""
-    text = str(value)
-    if "\n" in text or "\r" in text:
-        raise ValueError("登录信息里不能有换行符，无法写入 .env。")
-    if '"' in text:
-        raise ValueError('登录信息里不能有英文双引号，请先在终端环境变量里设置。')
-    if text.strip() != text or re.search(r"[\s#'\"]", text):
-        return f'"{text}"'
-    return text
-
-
-def upsert_env_file(path: Path, values: Mapping[str, str]) -> Path:
-    """把键值合并写回 .env：保留注释和其它键，权限 0600，原子替换。"""
-    remaining = {
-        key: _encode_env_value(value)
-        for key, value in values.items()
-        if str(value).strip()
-    }
-    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-    lines: list[str] = []
-    for raw in existing.splitlines():
-        key = ""
-        stripped = raw.strip()
-        if stripped and not stripped.startswith("#"):
-            body = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
-            if "=" in body:
-                key = body.split("=", 1)[0].strip()
-        if key and key in remaining:
-            lines.append(f"{key}={remaining.pop(key)}")
-            continue
-        lines.append(raw)
-    if remaining:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines.append("# HMRC 登录信息（本机私密文件，勿提交）")
-        lines.extend(f"{key}={value}" for key, value in remaining.items())
-    text = "\n".join(lines).rstrip("\n") + "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=".env-", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        os.chmod(temp_name, 0o600)
-        os.replace(temp_name, path)
-    except Exception:
-        Path(temp_name).unlink(missing_ok=True)
-        raise
-    path.chmod(0o600)
-    return path

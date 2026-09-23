@@ -111,12 +111,14 @@ Government Gateway 账号通常是在**英国 VAT 注册**那一步新建的（�
 1. VAT 注册跑到确认页时，程序会抓到 HMRC 显示的 Government Gateway User ID；
 2. **工作台**会把该 User ID 和这次用的邮箱/密码/手机号自动挂到**该客户**名下
    （`workbench-data/credentials.json`，权限 0600，git 忽略），界面只显示掩码后的
-   User ID；也可以填好表单后点「保存登录信息到该客户」手动补存；
+   User ID；单用户 `vat-web` 则存在 `hmrc-credentials.json`（按登录账号），
+   也可以点「保存登录信息到该客户」/「保存我的 HMRC 登录信息」手动补存；
 3. 之后给同一客户跑 EORI 时，把登录方式改成 `Government Gateway`，输入框留空即可：
    取值优先级是 表单填写 > 该客户已保存 > `.env`/进程环境 > 本机上一位操作者的内存记录。
 
-单用户 `vat-web` 没有客户概念，走的是项目根目录 `.env`：跑完新账号后点
-「保存为本机默认登录信息（写 .env）」，下次留空即用（同样 0600、git 忽略）。
+单用户 `vat-web` 没有客户概念，改为**按登录账号**存 `hmrc-credentials.json`
+（0600、git 忽略）：跑完新账号后点「保存我的 HMRC 登录信息」，下次留空即用。
+项目根目录 `.env` 只是可选的默认值来源（优先级最低），程序不再往里写。
 
 ## 5. 安全边界
 

@@ -8,6 +8,7 @@ vat-config*.json
 !vat-config.flow.json
 !vat-config.eori.flow.json
 users.json
+hmrc-credentials.json
 certs/
 .env
 .env.*
