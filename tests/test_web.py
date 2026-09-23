@@ -1,9 +1,11 @@
 import asyncio
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import HTTPException, Response, UploadFile
 from pydantic import ValidationError
@@ -752,6 +754,7 @@ class CredentialMemoryTests(unittest.TestCase):
         self.config_path.write_text(
             json.dumps({"identity_documents_required": 0}), encoding="utf-8"
         )
+        self.env_file = base / ".env"
 
         class StubJobManager(JobManager):
             runs: list[dict[str, str]] = []
@@ -767,7 +770,8 @@ class CredentialMemoryTests(unittest.TestCase):
                 self.runs.append(dict(credentials))
 
         StubJobManager.runs = []
-        self.manager = StubJobManager(self.config_path)
+        # 用临时 .env，避免测试写到项目根目录的真实文件。
+        self.manager = StubJobManager(self.config_path, self.env_file)
 
     def _start(self, **credentials: str) -> None:
         self.manager.start(
@@ -800,6 +804,53 @@ class CredentialMemoryTests(unittest.TestCase):
         snapshot = self.manager.snapshot("alice")
         self.assertTrue(snapshot["credentials_saved"])
         self.assertNotIn("secret-1", json.dumps(snapshot, ensure_ascii=False))
+
+    def test_credentials_can_come_from_env_file(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"HMRC_USER_ID": "123456789012", "HMRC_PASSWORD": "from-env"},
+            clear=False,
+        ):
+            self._start()
+            snapshot = self.manager.snapshot("alice")
+        self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "from-env")
+        self.assertEqual(self.manager.runs[-1]["HMRC_USER_ID"], "123456789012")
+        self.assertIn("HMRC_PASSWORD", snapshot["credentials_env"])
+        # 只暴露键名，不暴露值。
+        self.assertNotIn("from-env", json.dumps(snapshot, ensure_ascii=False))
+
+    def test_typed_credentials_win_over_env(self) -> None:
+        with patch.dict(os.environ, {"HMRC_PASSWORD": "from-env"}, clear=False):
+            self._start(HMRC_PASSWORD="typed")
+        self.assertEqual(self.manager.runs[-1]["HMRC_PASSWORD"], "typed")
+
+    def test_save_credentials_writes_user_id_and_password_to_env(self) -> None:
+        self._start(
+            HMRC_EMAIL="a@example.test",
+            HMRC_PASSWORD="secret-1",
+            HMRC_MFA_PHONE="13900000000",
+        )
+        self.manager._set_terminal_state(
+            self.manager.session("alice"), "completed", "流程已完成"
+        )
+        self.manager.remember_gateway_user_id(
+            self.manager.session("alice"), "123456789012"
+        )
+        with patch.dict(os.environ, {}, clear=False):
+            path = self.manager.save_credentials_to_env("alice")
+        self.assertEqual(path, self.env_file.resolve())
+        text = self.env_file.read_text(encoding="utf-8")
+        self.assertIn("HMRC_USER_ID=123456789012", text)
+        self.assertIn("HMRC_PASSWORD=secret-1", text)
+        self.assertIn("HMRC_EMAIL=a@example.test", text)
+        self.assertEqual(self.env_file.stat().st_mode & 0o777, 0o600)
+
+    def test_save_without_password_is_rejected(self) -> None:
+        self.manager._set_terminal_state(
+            self.manager.session("alice"), "failed", "没跑过"
+        )
+        with self.assertRaisesRegex(ValueError, "密码"):
+            self.manager.save_credentials_to_env("alice")
 
     def test_clear_credentials_forgets_password(self) -> None:
         self._start(HMRC_PASSWORD="secret-1")

@@ -44,6 +44,13 @@ from .document_parser import (
     extract_document,
     prepare_document_values,
 )
+from .envfile import (
+    apply_env,
+    default_env_path,
+    env_credentials,
+    load_env_file,
+    upsert_env_file,
+)
 from .runner import AutomationStopped, VatAutomation, is_skip_edit_action
 
 
@@ -149,6 +156,9 @@ class UserSession:
     final_review_edit: dict[str, Any] = field(default_factory=dict)
     # 登录信息只留在进程内存里，方便失败后重试；重启服务即失效，绝不落盘。
     saved_credentials: dict[str, str] = field(default_factory=dict)
+    # 上一次运行实际使用的登录信息，以及新建账号拿到的 Gateway User ID。
+    last_credentials: dict[str, str] = field(default_factory=dict)
+    gateway_user_id: str = ""
     review_action: str = ""
     review_target: str = ""
     thread: threading.Thread | None = None
@@ -166,8 +176,10 @@ def _initial_state() -> dict[str, Any]:
 
 
 class JobManager:
-    def __init__(self, config_path: Path) -> None:
+    def __init__(self, config_path: Path, env_path: Path | None = None) -> None:
         self.config_path = config_path
+        # 默认凭据来源：项目 .env（本机 0600，已忽略），网页留空时自动使用。
+        self.env_path = (env_path or default_env_path()).expanduser().resolve()
         self._lock = threading.Lock()
         self._sessions: dict[str, UserSession] = {}
         self._busy_with: str | None = None
@@ -179,6 +191,10 @@ class JobManager:
         self._upload_root = Path(tempfile.mkdtemp(prefix="uk-vat-private-uploads-"))
         self._upload_root.chmod(0o700)
         atexit.register(shutil.rmtree, self._upload_root, True)
+
+    def env_credential_keys(self) -> list[str]:
+        """`.env`/进程环境里可用的凭据键名（只返回名字，不返回值）。"""
+        return sorted(env_credentials(ALLOWED_ENV_KEYS))
 
     def _refresh_config(self) -> None:
         """把配置里的流程名、身份证明数量读进来，供界面显示和启动校验。"""
@@ -218,6 +234,9 @@ class JobManager:
                 "identity_documents": len(session.identity_documents),
                 "identity_required": self.identity_documents_required,
                 "credentials_saved": bool(session.saved_credentials),
+                "credentials_env": self.env_credential_keys(),
+                "gateway_user_id": session.gateway_user_id,
+                "env_path": str(self.env_path),
                 "flow_name": self.flow_name,
                 "sign_in_method": self.default_sign_in_method,
                 "final_review": {
@@ -263,9 +282,16 @@ class JobManager:
                     f"当前有 {self._busy_with} 的任务在运行，请等待其结束后再开始。"
                 )
             # 失败重试时网页不会再传密码，用本机进程内存里记住的补齐（只补缺的键）。
-            credentials = {**session.saved_credentials, **provided}
+            # 优先级：网页填写 > 本机内存记住 > .env/进程环境里的默认凭据。
+            credentials = {
+                **env_credentials(ALLOWED_ENV_KEYS),
+                **session.saved_credentials,
+                **provided,
+            }
             if provided:
                 session.saved_credentials = dict(credentials)
+            session.last_credentials = dict(credentials)
+            session.gateway_user_id = ""
             self._busy_with = session.username
             session.state = {
                 **_initial_state(),
@@ -323,6 +349,36 @@ class JobManager:
             if session.state["status"] in ACTIVE_STATES:
                 raise RuntimeError("自动化运行中不能清除登录信息。")
             session.saved_credentials = {}
+            session.last_credentials = {}
+            session.gateway_user_id = ""
+
+    def remember_gateway_user_id(self, session: UserSession, user_id: str) -> None:
+        """新建 Government Gateway 账号后，把 HMRC 显示的 User ID 记到会话里。"""
+        session.gateway_user_id = str(user_id).strip()
+
+    def save_credentials_to_env(self, username: str) -> Path:
+        """把上次运行的登录信息（含新建的 Gateway User ID）写回 .env。"""
+        session = self.session(username)
+        with self._lock:
+            if session.state["status"] in ACTIVE_STATES:
+                raise RuntimeError("自动化运行中不能保存登录信息。")
+            values = {
+                "HMRC_EMAIL": session.last_credentials.get("HMRC_EMAIL", ""),
+                "HMRC_USER_ID": session.gateway_user_id
+                or session.last_credentials.get("HMRC_USER_ID", ""),
+                "HMRC_PASSWORD": session.last_credentials.get("HMRC_PASSWORD", ""),
+                "HMRC_MFA_PHONE": session.last_credentials.get("HMRC_MFA_PHONE", ""),
+            }
+        values = {key: value for key, value in values.items() if value}
+        if not values.get("HMRC_PASSWORD"):
+            raise ValueError("还没有可保存的密码：请先填一次密码并启动过任务。")
+        try:
+            path = upsert_env_file(self.env_path, values)
+        except OSError as exc:
+            raise RuntimeError(f"无法写入 {self.env_path}：{exc}") from exc
+        # 同时写进进程环境，之后启动的任务不用重启服务也能读到。
+        apply_env(values)
+        return path
 
     def _record_failure(
         self,
@@ -682,6 +738,9 @@ class JobManager:
                     pause_checkpoint_provider=pause_checkpoint,
                     final_review_provider=partial(self._final_review, session),
                     remote_edit_provider=partial(self._remote_edit, session),
+                    gateway_user_id_provider=partial(
+                        self.remember_gateway_user_id, session
+                    ),
                     event_handler=partial(self._event, session),
                     audit_context={"user": session.username},
                 )
@@ -708,6 +767,7 @@ class JobManager:
 @dataclass
 class ServerContext:
     config_path: Path = Path("vat-config.flow.json")
+    env_path: Path = field(default_factory=default_env_path)
     users: UserStore = field(default_factory=lambda: UserStore(Path("users.json")))
     signer: SessionSigner = field(default_factory=SessionSigner)
     throttle: LoginThrottle = field(default_factory=LoginThrottle)
@@ -719,7 +779,7 @@ class ServerContext:
 
     def jobs(self) -> JobManager:
         if self.manager is None:
-            self.manager = JobManager(self.config_path)
+            self.manager = JobManager(self.config_path, self.env_path)
         return self.manager
 
     def needs_setup(self) -> bool:
@@ -974,6 +1034,21 @@ async def clear_credentials(
     return {"status": "cleared"}
 
 
+@app.post("/api/credentials/save")
+async def save_credentials(
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, str]:
+    """把上次运行的登录信息写回 .env，之后启动不用再手输。"""
+    try:
+        path = context.jobs().save_credentials_to_env(username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "saved", "path": str(path)}
+
+
 @app.post("/api/code")
 async def submit_code(
     request: CodeRequest,
@@ -1128,6 +1203,7 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = parser().parse_args()
+    env_path = load_env_file()
     context.config_path = args.config.expanduser().resolve()
     context.users = UserStore(args.users.expanduser().resolve())
     context.manager = None
@@ -1138,6 +1214,9 @@ def main() -> None:
     # 因此启动横幅必须立即 flush。
     def banner(text: str) -> None:
         print(text, flush=True)
+
+    if env_path is not None:
+        banner(f"已从 {env_path} 读取默认登录信息（网页留空时会自动使用）。")
 
     if context.needs_setup():
         token = context.ensure_setup_token()

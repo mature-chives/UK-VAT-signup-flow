@@ -54,6 +54,9 @@ BROWSER_ERROR_HEADINGS_NORMALIZED = (
     "err connection",
     "your connection is not private",
 )
+# 新建 Government Gateway 账号后 HMRC 会显示 "Your Government Gateway user ID is:"。
+GATEWAY_USER_ID_HEADING = "government gateway user id"
+GATEWAY_USER_ID_PATTERN = re.compile(r"\b\d{10,12}\b")
 # 网络抖动时退回上一页重试的次数（单次错误），以及整个任务允许的恢复总次数。
 BROWSER_ERROR_RETRIES = 2
 BROWSER_ERROR_RECOVERY_LIMIT = 3
@@ -93,6 +96,7 @@ class VatAutomation:
         remote_edit_provider: Callable[
             [dict[str, Any]], Awaitable[dict[str, Any]]
         ] | None = None,
+        gateway_user_id_provider: Callable[[str], Awaitable[None] | None] | None = None,
         event_handler: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
         audit_context: Mapping[str, str] | None = None,
         document_values: dict[str, str] | Mapping[str, str] | None = None,
@@ -117,6 +121,9 @@ class VatAutomation:
         self.pause_checkpoint_provider = pause_checkpoint_provider
         self.final_review_provider = final_review_provider
         self.remote_edit_provider = remote_edit_provider
+        # 新建 Government Gateway 账号后把 User ID 交给外层保存（网页/工作台）。
+        self.gateway_user_id_provider = gateway_user_id_provider
+        self.gateway_user_id = ""
         self.event_handler = event_handler
         # 多用户场景下用于在审计记录里标注操作人，不含任何凭据。
         self.audit_context = dict(audit_context or {})
@@ -330,8 +337,32 @@ class VatAutomation:
                 return True
         return False
 
+    async def _capture_gateway_user_id(self, page: Any, heading: str) -> None:
+        """新建 Government Gateway 账号后，HMRC 会显示 User ID；抓下来供复用。
+
+        审计日志只记掩码后的值，完整值放内存交给网页/工作台保存（如写进 .env）。
+        """
+        if GATEWAY_USER_ID_HEADING not in normalize(heading):
+            return
+        try:
+            text = await page.locator("main").inner_text()
+        except Exception:
+            return
+        match = GATEWAY_USER_ID_PATTERN.search(text or "")
+        if match is None:
+            return
+        self.gateway_user_id = match.group(0)
+        await self._audit(
+            "gateway-user-id-captured", user_id=_masked_value(self.gateway_user_id)
+        )
+        if self.gateway_user_id_provider is not None:
+            result = self.gateway_user_id_provider(self.gateway_user_id)
+            if result is not None:
+                await result
+
     async def _handle_auth(self, page: Any, heading: str) -> None:
         """自动处理凭据和安全方式，仅验证码由用户即时输入。"""
+        await self._capture_gateway_user_id(page, heading)
         password = page.locator('input[type="password"]:visible')
         if await password.count():
             user_password = self._credentials.get("HMRC_PASSWORD", "")
@@ -1523,6 +1554,14 @@ class VatAutomation:
         except sqlite3.Error:
             return saved
         return str(row[0]) if row else saved
+
+
+def _masked_value(value: str, *, head: int = 2, tail: int = 2) -> str:
+    """审计日志里只留掩码，避免完整凭据/标识落盘。"""
+    text = str(value)
+    if len(text) <= head + tail:
+        return "*" * len(text)
+    return f"{text[:head]}{'*' * (len(text) - head - tail)}{text[-tail:]}"
 
 
 def _safe_url(value: str) -> str:

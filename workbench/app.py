@@ -34,7 +34,7 @@ from vat_automation.web import (
 )
 
 from .catalog import get_plugin, list_plugins, load_builtin_plugins
-from .envfile import load_env_file
+from vat_automation.envfile import load_env_file
 from .id_card_ocr import recognize_id_card_pack
 from .id_card_render import build_task_id_card_pdf
 from .id_card_translate import (
@@ -555,6 +555,28 @@ async def clear_credentials(
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "cleared"}
+
+
+@app.post("/api/credentials/save")
+async def save_credentials(
+    username: str = Depends(current_user),
+    _: None = Depends(require_csrf),
+) -> dict[str, str]:
+    """把上次运行的登录信息（含新建的 Gateway User ID）写回 .env。"""
+    last_error: ValueError | None = None
+    for task_kind in AUTOMATION_FLOWS:
+        try:
+            path = context.job_manager(task_kind).save_credentials_to_env(username)
+        except ValueError as exc:
+            # 这条通道还没有可保存的信息，试下一条。
+            last_error = exc
+            continue
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "saved", "path": str(path)}
+    raise HTTPException(
+        status_code=400, detail=str(last_error or "没有可保存的登录信息。")
+    )
 
 
 @app.post("/api/tasks/{task_id}/{flow}/code")

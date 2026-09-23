@@ -23,6 +23,7 @@ from vat_automation.runner import (
     AutomationStopped,
     Control,
     VatAutomation,
+    _masked_value,
     _safe_url,
 )
 from vat_automation.screenshot_flow import (
@@ -1523,6 +1524,72 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(
             VatAutomation._is_remote_error_heading("Check your answers")
         )
+
+class GatewayUserIdCaptureTests(unittest.TestCase):
+    """新建 Government Gateway 账号后抓取 User ID，供写回 .env 复用。"""
+
+    def _runner(self) -> VatAutomation:
+        class CaptureRunner(VatAutomation):
+            events: list[dict] = []
+            captured: list[str] = []
+
+            async def _audit(self, event: str, **details: object) -> None:
+                self.events.append({"event": event, **details})
+
+        settings = Settings(
+            start_url="https://example.test",
+            profile_dir=Path(".browser-profile"),
+            artifacts_dir=Path("artifacts"),
+            answers={},
+            pages=[],
+        )
+        runner = CaptureRunner(settings, interactive=False, credentials={})
+        runner.gateway_user_id_provider = runner.captured.append
+        return runner
+
+    @staticmethod
+    def _page(text: str) -> object:
+        class Locator:
+            async def inner_text(self) -> str:
+                return text
+
+        class Page:
+            url = "https://www.access.service.gov.uk/registration/confirmation/x"
+
+            def locator(self, _selector: str) -> Locator:
+                return Locator()
+
+        return Page()
+
+    def test_user_id_is_captured_and_audited_masked(self) -> None:
+        runner = self._runner()
+        asyncio.run(
+            runner._capture_gateway_user_id(
+                self._page(
+                    "Your Government Gateway user ID is:\n123456789012\nKeep it safe."
+                ),
+                "Your Government Gateway user ID is:",
+            )
+        )
+        self.assertEqual(runner.gateway_user_id, "123456789012")
+        self.assertEqual(runner.captured, ["123456789012"])
+        self.assertEqual(
+            runner.events, [{"event": "gateway-user-id-captured", "user_id": "12********12"}]
+        )
+
+    def test_other_pages_are_ignored(self) -> None:
+        runner = self._runner()
+        asyncio.run(
+            runner._capture_gateway_user_id(
+                self._page("123456789012"), "Enter your email address"
+            )
+        )
+        self.assertEqual(runner.gateway_user_id, "")
+        self.assertEqual(runner.events, [])
+
+    def test_masked_value_hides_the_middle(self) -> None:
+        self.assertEqual(_masked_value("123456789012"), "12********12")
+        self.assertEqual(_masked_value("1234"), "****")
 
 
 class SignInMethodTests(unittest.TestCase):

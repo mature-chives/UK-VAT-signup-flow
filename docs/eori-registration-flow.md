@@ -103,6 +103,22 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
 程序会停在认证页并保存 `auth-validation-error` 截图。
 `HMRC_MFA_PHONE_COUNTRY` 缺省取资料里的 `country`。
 
+### 账号从 VAT 注册传到 EORI
+
+Government Gateway 账号通常是在**英国 VAT 注册**那一步新建的（程序会走
+邮箱验证码 → 姓名 → 密码 → 生成 User ID → MFA）。把账号留下来给 EORI 复用：
+
+1. VAT 注册跑到确认页时，程序会抓到 HMRC 显示的 Government Gateway User ID，
+   网页上会出现一行「新建的 Government Gateway User ID：xxxxxxxxxxxx」；
+2. 点「保存登录信息到 .env」（工作台在自动化操作区也有这个按钮），会把
+   `HMRC_EMAIL`、`HMRC_USER_ID`、`HMRC_PASSWORD`、`HMRC_MFA_PHONE` 写进项目根目录
+   `.env`（权限 0600，已在 `.gitignore`）；
+3. 之后跑 EORI 时，把登录方式改成 `Government Gateway`，输入框留空即可——
+   程序优先用网页填的值，其次用 `.env` 里的默认值。
+
+注意 `.env` 只保存**一套**账号，多客户并行时要换成客户自己的那套（或在工作台
+按客户分别记录，属于下一步的改造）。
+
 ## 5. 安全边界
 
 - 进入 EORI 数据区（`/customs-registration-services/eori-only/`）前，若配置是

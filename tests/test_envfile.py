@@ -6,7 +6,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from workbench.envfile import apply_env, load_env_file, parse_env_text
+from vat_automation.envfile import (
+    apply_env,
+    env_credentials,
+    load_env_file,
+    parse_env_text,
+    upsert_env_file,
+)
 
 
 class EnvFileTests(unittest.TestCase):
@@ -60,6 +66,49 @@ not-a-pair
                 self.assertEqual(os.environ.get("TRANSLATE_APP_ID"), "app-id")
             self.assertEqual(loaded, path.resolve())
             self.assertIsNone(load_env_file(Path(raw) / "missing.env"))
+
+
+class EnvWriteTests(unittest.TestCase):
+    """把新账号写回 .env：保留其它键与注释，权限 0600。"""
+
+    def test_upsert_keeps_other_keys_and_updates_in_place(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / ".env"
+            path.write_text(
+                "# 翻译密钥\nTRANSLATE_APP_ID=app-id\nHMRC_PASSWORD=old\n",
+                encoding="utf-8",
+            )
+            upsert_env_file(
+                path,
+                {
+                    "HMRC_USER_ID": "123456789012",
+                    "HMRC_PASSWORD": "brand new",
+                },
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("# 翻译密钥", text)
+            self.assertIn("TRANSLATE_APP_ID=app-id", text)
+            self.assertIn("HMRC_USER_ID=123456789012", text)
+            self.assertIn('HMRC_PASSWORD="brand new"', text)
+            self.assertNotIn("old", text)
+            self.assertEqual(parse_env_text(text)["HMRC_PASSWORD"], "brand new")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_values_with_line_break_or_quote_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / ".env"
+            with self.assertRaisesRegex(ValueError, "换行"):
+                upsert_env_file(path, {"HMRC_PASSWORD": "a\nb"})
+            with self.assertRaisesRegex(ValueError, "双引号"):
+                upsert_env_file(path, {"HMRC_PASSWORD": 'a"b'})
+            self.assertFalse(path.exists())
+
+    def test_env_credentials_only_returns_present_keys(self) -> None:
+        values = env_credentials(
+            ("HMRC_USER_ID", "HMRC_PASSWORD", "HMRC_EMAIL"),
+            {"HMRC_USER_ID": " 123 ", "HMRC_EMAIL": "   "},
+        )
+        self.assertEqual(values, {"HMRC_USER_ID": "123"})
 
 
 if __name__ == "__main__":

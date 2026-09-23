@@ -181,7 +181,9 @@
         <div class="actions">
           <button id="start-automation" type="button" disabled>启动自动化</button>
           <button id="clear-credentials" class="secondary" type="button">清除已记住的登录信息</button>
+          <button id="save-credentials" class="secondary" type="button" hidden>保存登录信息到 .env</button>
         </div>
+        <p class="hint" id="gateway-hint" hidden></p>
       </div>
       <div id="otp">
         <strong>请输入验证码</strong>
@@ -749,6 +751,12 @@ function showAutomationStatus(task) {
   $("run-status").textContent = task.message || statusLabel(task.status);
   const snap = task.automation || {};
   $("otp").style.display = snap.status === "waiting_code" ? "block" : "none";
+  const gatewayId = snap.gateway_user_id || "";
+  $("gateway-hint").hidden = !gatewayId;
+  $("save-credentials").hidden = !gatewayId;
+  if (gatewayId) {
+    $("gateway-hint").textContent = `新建的 Gateway User ID：${gatewayId}。保存到 .env 后，下次可直接用 Government Gateway 登录。`;
+  }
 }
 
 function applyHash() {
@@ -984,6 +992,21 @@ $("clear-credentials").addEventListener("click", async () => {
     $("run-status").style.display = "block";
     $("run-status").className = "status";
     $("run-status").textContent = "已清除本机记住的登录信息，下次启动请重新填写邮箱和密码。";
+  } catch (error) {
+    $("run-status").style.display = "block";
+    $("run-status").className = "status blocked";
+    $("run-status").textContent = error.message;
+  }
+});
+$("save-credentials").addEventListener("click", async () => {
+  try {
+    const body = await api("/api/credentials/save", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({})
+    });
+    $("run-status").style.display = "block";
+    $("run-status").className = "status";
+    $("run-status").textContent = `已保存到 ${body.path}；下次用 Government Gateway 直接登录。`;
   } catch (error) {
     $("run-status").style.display = "block";
     $("run-status").className = "status blocked";
