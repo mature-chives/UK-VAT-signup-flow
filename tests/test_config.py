@@ -1574,8 +1574,43 @@ class GatewayUserIdCaptureTests(unittest.TestCase):
         self.assertEqual(runner.gateway_user_id, "123456789012")
         self.assertEqual(runner.captured, ["123456789012"])
         self.assertEqual(
-            runner.events, [{"event": "gateway-user-id-captured", "user_id": "12********12"}]
+            runner.events,
+            [
+                {
+                    "event": "gateway-user-id-captured",
+                    "user_id": "12********12",
+                    "digits": 12,
+                    "matched": "12-digit",
+                }
+            ],
         )
+
+    def test_email_digits_are_not_mistaken_for_the_user_id(self) -> None:
+        """真实踩过的坑：页面上的邮箱 1143038963@qq.com 被当成了 User ID。"""
+        runner = self._runner()
+        asyncio.run(
+            runner._capture_gateway_user_id(
+                self._page(
+                    "We have sent a confirmation email to 1143038963@qq.com.\n"
+                    "Your Government Gateway user ID is:\n"
+                    "123456789012\n"
+                ),
+                "Your Government Gateway user ID is:",
+            )
+        )
+        self.assertEqual(runner.gateway_user_id, "123456789012")
+        self.assertEqual(runner.events[0]["matched"], "12-digit")
+
+    def test_ten_digit_fallback_is_marked(self) -> None:
+        runner = self._runner()
+        asyncio.run(
+            runner._capture_gateway_user_id(
+                self._page("Your Government Gateway user ID is: 1143038963"),
+                "Your Government Gateway user ID is:",
+            )
+        )
+        self.assertEqual(runner.gateway_user_id, "1143038963")
+        self.assertEqual(runner.events[0]["matched"], "fallback")
 
     def test_other_pages_are_ignored(self) -> None:
         runner = self._runner()

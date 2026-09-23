@@ -980,6 +980,24 @@ class CredentialMemoryTests(unittest.TestCase):
         self.assertEqual(snapshot["credentials_stored"]["user_id"], "98********98")
         self.assertNotIn("old-pw", json.dumps(snapshot, ensure_ascii=False))
 
+    def test_saved_user_id_can_be_corrected_by_hand(self) -> None:
+        """抓取可能被页面里其它数字干扰，保存时允许手改 User ID。"""
+        self._start(
+            {"project_code": "AB223322"},
+            HMRC_USER_ID="1143038963",
+            HMRC_EMAIL="1143038963@qq.com",
+            HMRC_PASSWORD="fixed-pw",
+        )
+        self.manager.save_credentials(
+            "alice", {"HMRC_USER_ID": "123456789012"}
+        )
+        stored = self.manager.credential_store.get("AB223322")
+        self.assertEqual(stored["HMRC_USER_ID"], "123456789012")
+        self.assertEqual(
+            self.manager.snapshot("alice")["credentials_stored"]["user_id"],
+            "12********12",
+        )
+
     def test_clear_credentials_forgets_password(self) -> None:
         self._start(HMRC_PASSWORD="secret-1")
         self.manager._set_terminal_state(

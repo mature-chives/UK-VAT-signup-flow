@@ -16,6 +16,7 @@ import traceback
 import uuid
 import webbrowser
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
@@ -93,6 +94,11 @@ class StartRequest(BaseModel):
 
 class CodeRequest(BaseModel):
     code: str = Field(min_length=1, max_length=32)
+
+
+class CredentialSaveRequest(BaseModel):
+    # 保存前允许手改的字段（例如核对/修正 Gateway User ID）。
+    credentials: dict[str, str] = Field(default_factory=dict)
 
 
 class ContinueRequest(BaseModel):
@@ -430,13 +436,22 @@ class JobManager:
                 values["HMRC_USER_ID"] = session.gateway_user_id
         return {key: value for key, value in values.items() if str(value).strip()}
 
-    def save_credentials(self, username: str) -> dict[str, str]:
+    def save_credentials(
+        self, username: str, overrides: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
         """把上次运行实际使用的登录信息（含新建的 Gateway User ID）存到本机。"""
         session = self.session(username)
         # 注意：last_run_credentials 自己会加锁，这里不能再持锁，否则死锁。
         if session.state["status"] in ACTIVE_STATES:
             raise RuntimeError("自动化运行中不能保存登录信息。")
-        values = self.last_run_credentials(username)
+        values = {
+            **self.last_run_credentials(username),
+            **{
+                key: str(value).strip()
+                for key, value in dict(overrides or {}).items()
+                if str(value).strip()
+            },
+        }
         if not values.get("HMRC_PASSWORD"):
             raise ValueError("还没有可保存的密码：请先填一次密码并启动过任务。")
         try:
@@ -1115,12 +1130,14 @@ async def clear_credentials(
 
 @app.post("/api/credentials/save")
 async def save_credentials(
+    request: CredentialSaveRequest | None = None,
     username: str = Depends(current_user),
     _: None = Depends(require_csrf),
 ) -> dict[str, str]:
     """把上次运行的登录信息保存到本机私有存储，之后启动不用再手输。"""
     try:
-        return context.jobs().save_credentials(username)
+        overrides = dict(request.credentials) if request is not None else {}
+        return context.jobs().save_credentials(username, overrides)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (OSError, RuntimeError) as exc:

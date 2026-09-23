@@ -56,7 +56,13 @@ BROWSER_ERROR_HEADINGS_NORMALIZED = (
 )
 # 新建 Government Gateway 账号后 HMRC 会显示 "Your Government Gateway user ID is:"。
 GATEWAY_USER_ID_HEADING = "government gateway user id"
-GATEWAY_USER_ID_PATTERN = re.compile(r"\b\d{10,12}\b")
+# HMRC 的 Government Gateway User ID 是 12 位数字。页面里还可能出现邮箱
+# （例如 1143038963@qq.com）等其它数字，所以先按"独立的 12 位"找，
+# 找不到才退回 10–11 位，并且一律排除紧挨 @ 或字母数字的那串。
+GATEWAY_USER_ID_PATTERN = re.compile(r"(?<![\dA-Za-z@])(\d{12})(?![\dA-Za-z@])")
+GATEWAY_USER_ID_FALLBACK_PATTERN = re.compile(
+    r"(?<![\dA-Za-z@])(\d{10,11})(?![\dA-Za-z@])"
+)
 # 网络抖动时退回上一页重试的次数（单次错误），以及整个任务允许的恢复总次数。
 BROWSER_ERROR_RETRIES = 2
 BROWSER_ERROR_RECOVERY_LIMIT = 3
@@ -348,12 +354,20 @@ class VatAutomation:
             text = await page.locator("main").inner_text()
         except Exception:
             return
-        match = GATEWAY_USER_ID_PATTERN.search(text or "")
+        haystack = text or ""
+        match = GATEWAY_USER_ID_PATTERN.search(haystack)
+        matched = "12-digit"
+        if match is None:
+            match = GATEWAY_USER_ID_FALLBACK_PATTERN.search(haystack)
+            matched = "fallback"
         if match is None:
             return
         self.gateway_user_id = match.group(0)
         await self._audit(
-            "gateway-user-id-captured", user_id=_masked_value(self.gateway_user_id)
+            "gateway-user-id-captured",
+            user_id=_masked_value(self.gateway_user_id),
+            digits=len(self.gateway_user_id),
+            matched=matched,
         )
         if self.gateway_user_id_provider is not None:
             result = self.gateway_user_id_provider(self.gateway_user_id)

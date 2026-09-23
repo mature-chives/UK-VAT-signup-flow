@@ -113,6 +113,8 @@
         <button id="clear-credentials" class="secondary" type="button" hidden>清除已保存的登录信息</button>
         <div id="gateway-box" hidden>
           <p class="hint">新建的 Government Gateway User ID：<b id="gateway-user-id"></b>。保存后下次直接用 Government Gateway 登录，不用再手动填。</p>
+          <label for="gateway-user-id-input">核对 / 修改 User ID（保存前请和 HMRC 页面或邮件核对，12 位数字）</label>
+          <input id="gateway-user-id-input" autocomplete="off" inputmode="numeric">
           <button id="save-credentials" class="secondary" type="button">保存我的 HMRC 登录信息</button>
           <div id="save-credentials-message" class="message"></div>
         </div>
@@ -500,7 +502,10 @@ $('clear-credentials').addEventListener('click', async () => {
 
 $('save-credentials').addEventListener('click', async () => {
   setMessage('save-credentials-message', '');
-  const response = await post('/api/credentials/save', {});
+  // 允许在保存前手改 User ID（抓取可能被页面里其它数字干扰）。
+  const response = await post('/api/credentials/save', {
+    credentials: {HMRC_USER_ID: $('gateway-user-id-input').value}
+  });
   const body = await response.json();
   if (!response.ok) { setMessage('save-credentials-message', body.detail || '保存失败', 'error'); return; }
   credentialsStored = true;
@@ -791,6 +796,9 @@ async function refresh() {
     credentialsFromEnv = state.credentials_env || [];
     $('gateway-box').hidden = !state.gateway_user_id;
     $('gateway-user-id').textContent = state.gateway_user_id || '';
+    if (state.gateway_user_id && !$('gateway-user-id-input').value) {
+      $('gateway-user-id-input').value = state.gateway_user_id;
+    }
     const stored = state.credentials_stored || {};
     storedHasPassword = !!stored.has_password;
     if (stored.saved) {
