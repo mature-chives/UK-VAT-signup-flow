@@ -959,6 +959,27 @@ class CredentialMemoryTests(unittest.TestCase):
         self._start({"project_code": "ZZ000000"}, HMRC_PASSWORD="fixed-pw")
         self.assertNotIn("HMRC_SIGN_IN_METHOD", self.manager.runs[-1])
 
+    def test_manual_user_id_from_form_switches_to_government_gateway(self) -> None:
+        """外部旧账号（不是本系统注册的）：手填 User ID + 密码即可走 GG 登录。"""
+        self._start(
+            {"project_code": "OLD12345"},
+            HMRC_USER_ID="987654321098",
+            HMRC_EMAIL="old@example.test",
+            HMRC_PASSWORD="old-pw",
+            HMRC_MFA_PHONE="13900000000",
+        )
+        self.assertEqual(
+            self.manager.runs[-1]["HMRC_SIGN_IN_METHOD"], "Government Gateway"
+        )
+        # 手填的账号同样可以存下来，下次留空即用。
+        self.manager.save_credentials("alice")
+        stored = self.manager.credential_store.get("OLD12345")
+        self.assertEqual(stored["HMRC_USER_ID"], "987654321098")
+        self.assertEqual(stored["HMRC_PASSWORD"], "old-pw")
+        snapshot = self.manager.snapshot("alice")
+        self.assertEqual(snapshot["credentials_stored"]["user_id"], "98********98")
+        self.assertNotIn("old-pw", json.dumps(snapshot, ensure_ascii=False))
+
     def test_clear_credentials_forgets_password(self) -> None:
         self._start(HMRC_PASSWORD="secret-1")
         self.manager._set_terminal_state(
