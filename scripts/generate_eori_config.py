@@ -35,7 +35,7 @@ def test_values() -> dict[str, str]:
         "doc:phone": "07700900123",
         "doc:vat_number": f"GB{secrets.randbelow(900_000_000) + 100_000_000}",
         "doc:postcode|doc:business_postcode": "200000",
-        "doc:vat_contact_email|env:HMRC_EMAIL": "env:HMRC_EMAIL",
+        "doc:vat_contact_email": "eori-notifications@example.test",
         "doc:country|env:HMRC_MFA_PHONE_COUNTRY": "env:HMRC_MFA_PHONE_COUNTRY",
         "doc:company-incorporation-date.day": str(established.day),
         "doc:company-incorporation-date.month": str(established.month),

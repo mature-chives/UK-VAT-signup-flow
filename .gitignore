@@ -2,6 +2,7 @@
 .browser-profile*/
 .venv/
 workbench-data/
+vat-web-data/
 artifacts*/
 vat-config*.json
 !vat-config.example.json
@@ -9,6 +10,11 @@ vat-config*.json
 !vat-config.eori.flow.json
 users.json
 hmrc-credentials.json
+.mail-pool/
+.authenticator/
+.authenticator-key
+.authenticator-key-*
+*.eml
 certs/
 .env
 .env.*

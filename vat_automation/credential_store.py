@@ -111,6 +111,7 @@ class CredentialStore:
                 "user_id": "",
                 "email": "",
                 "has_password": False,
+                "has_phone": False,
                 "updated_at": "",
             }
         return {
@@ -118,5 +119,6 @@ class CredentialStore:
             "user_id": mask_value(values.get("HMRC_USER_ID", "")),
             "email": str(values.get("HMRC_EMAIL", "")),
             "has_password": bool(values.get("HMRC_PASSWORD", "")),
+            "has_phone": bool(values.get("HMRC_MFA_PHONE", "")),
             "updated_at": str(record.get("updated_at", "")),
         }

@@ -54,7 +54,7 @@ class EoriFlowConfigTests(unittest.TestCase):
         raw = json.loads(FLOW_CONFIG.read_text(encoding="utf-8"))
         blob = json.dumps(raw, ensure_ascii=False)
         self.assertIn("doc:business_name", blob)
-        self.assertIn("doc:vat_contact_email|env:HMRC_EMAIL", blob)
+        self.assertIn("doc:vat_contact_email", blob)
         self.assertEqual(raw["start_url"], EORI_START_URL)
         self.assertEqual(raw["identity_documents_required"], 0)
         # 流程表只能出现占位符或固定选项，不能混入任何客户真值。
@@ -162,15 +162,14 @@ class EoriFlowConfigTests(unittest.TestCase):
         )
         self.assertEqual(page["default_answer"], "47910")
 
-    def test_eori_defaults_to_creating_a_new_government_gateway_account(self) -> None:
-        # 新客户没有 Government Gateway 账号，只能在申请过程中建号；
-        # 已有账号时由操作人在网页上改成 Government Gateway 登录。
+    def test_eori_defaults_to_existing_government_gateway_account(self) -> None:
+        # 默认用已有账号登录；没有账号时可在网页切换为创建新的登录信息。
         config = build_eori_flow_config()
         self.assertEqual(
-            config["default_sign_in_method"], "Create new sign in details"
+            config["default_sign_in_method"], "Government Gateway"
         )
         raw = json.loads(FLOW_CONFIG.read_text(encoding="utf-8"))
-        self.assertEqual(raw["default_sign_in_method"], "Create new sign in details")
+        self.assertEqual(raw["default_sign_in_method"], "Government Gateway")
     def test_every_screenshot_page_has_a_rule(self) -> None:
         config = build_eori_flow_config()
         paths = [

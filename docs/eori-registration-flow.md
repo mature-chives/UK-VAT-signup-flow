@@ -12,10 +12,10 @@ HMRC 的 EORI 服务与 VAT 服务同一个域名（`tax.service.gov.uk`），�
 | 截图 | 页面 | 自动化取值 |
 | --- | --- | --- |
 | image1、image2 | GOV.UK「Get an EORI number」「Apply for an EORI number」指南页 | `start_url` 入口，点 `Start now` |
-| image4 | HMRC 登录方式（Government Gateway／One Login／Create new sign in details） | `HMRC_SIGN_IN_METHOD`，缺省用流程配置的 `default_sign_in_method`（EORI 默认新建账号） |
+| image4 | HMRC 登录方式（Government Gateway／One Login／Create new sign in details） | `HMRC_SIGN_IN_METHOD`，缺省用流程配置的 `default_sign_in_method`（EORI 默认 Government Gateway） |
 | image5 | Government Gateway 短信验证码 | 人工在网页输入 |
 | image3 | `/register/vat-group`：Is your organisation part of a VAT group in the UK? | `No` |
-| image6 | `/register/matching/what-is-your-email`：What email address can we use for customs notifications? | `doc:vat_contact_email` 或 `env:HMRC_EMAIL` |
+| image6 | `/register/matching/what-is-your-email`：What email address can we use for customs notifications? | `doc:vat_contact_email`，须人工核对，不回退到登录邮箱 |
 | image7 | `/register/matching/check-your-email`：Is … the email address you want to use? | `Yes`（标题里带客户邮箱，靠 `default_answer` 兜底） |
 | image8 | Enter code to confirm your email address | 人工在网页输入 |
 | image9 | Where is your organisation established? | `Rest of the world` |
@@ -56,7 +56,7 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
 | `vat_number` | 英国 VAT 号（9 位，可带 GB 前缀） |
 | `vat_registration_date` | VAT 注册生效日期 |
 | `company_incorporation_date` | 公司成立日期 |
-| `vat_contact_email` | 接收 customs 通知的邮箱，缺省用 `env:HMRC_EMAIL` |
+| `vat_contact_email` | EORI 通知邮箱（必填），接收海关通知及邮箱验证码；可与开户邮箱不同，不自动使用登录邮箱 |
 
 `vat_registration_date`、`company_incorporation_date` 会被 `prepare_document_values()`
 自动拆成 `<prefix>.day/.month/.year`（前缀分别是 `vat-registration-date`、
@@ -69,8 +69,8 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
 # 改动 eori_flow.py 后重新生成可提交的流程配置
 .venv/bin/python scripts/generate_eori_config.py
 
-# 单用户 Web UI（资料袋解析 + 验证码 + 最终核对），EORI 用 8766 与 VAT 分开跑
-.venv/bin/vat-web --config vat-config.eori.flow.json --port 8766
+# 单用户 Web UI：在 8765 同一入口选择 VAT / EORI，无需分别启动
+.venv/bin/vat-web
 
 # 销售交付工作台：一个菜单里同时有「英国 VAT 注册」和「英国 EORI 注册」
 .venv/bin/vat-bench --uk-vat-config vat-config.flow.json \
@@ -87,17 +87,22 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
 .venv/bin/python scripts/eori_smoke.py
 ```
 
-需要的登录环境变量与 VAT 流程相同：`HMRC_USER_ID`、`HMRC_PASSWORD`、
-`HMRC_EMAIL`、`HMRC_MFA_PHONE`。登录方式优先级是：网页/环境变量给的
+GG 登录使用 `HMRC_USER_ID`、`HMRC_PASSWORD`，验证码按账号已有设置接收，
+无需填写开户邮箱和开户手机号。创建账号时填写开户邮箱 `HMRC_EMAIL`、姓名、密码及
+验证手机号 `HMRC_MFA_PHONE`。登录方式优先级是：网页/环境变量给的
 `HMRC_SIGN_IN_METHOD` > 流程配置的 `default_sign_in_method` >
 `Create new sign in details`。
+
+单用户页面根据登录方式显示对应凭据。EORI 联系方式里单独显示必填的“EORI 通知邮箱”，
+从授权表的“VAT沟通邮箱”预填后需人工核对。创建账号时可点击“使用开户邮箱”复制当前
+填写的开户邮箱，复制后需要重新确认资料；后续修改开户邮箱不会自动改动通知邮箱。
 
 两种登录方式的选择依据是**客户有没有现成的 Government Gateway 账号**：
 
 | 情况 | 登录方式 | 需要提供 | 会发生什么 |
 | --- | --- | --- | --- |
-| 新客户，没有 GG 账号 | `Create new sign in details`（默认） | 登录邮箱、手机号、密码（+ 姓名） | 程序在申请过程中建号：邮箱验证码 → 姓名 → 密码 → 生成 User ID → MFA 短信验证码 |
-| 客户已有 GG 账号（例如我们自己帮客户做过 VAT 注册并留下 User ID/密码） | `Government Gateway` | Gateway User ID、密码，手机号用于 MFA | 直接登录，不会再走建号和邮箱验证 |
+| 新客户，没有 GG 账号 | 手动选择 `Create new sign in details` | 登录邮箱、手机号、密码（+ 姓名） | 程序在申请过程中建号：邮箱验证码 → 姓名 → 密码 → 生成 User ID → MFA 短信验证码 |
+| 客户已有 GG 账号（例如我们自己帮客户做过 VAT 注册并留下 User ID/密码） | `Government Gateway`（默认） | Gateway User ID、密码，手机号用于 MFA | 直接登录，不会再走建号和邮箱验证 |
 
 所以没有账号时选 Government Gateway 是走不通的：HMRC 会提示 User ID/密码不正确，
 程序会停在认证页并保存 `auth-validation-error` 截图。
