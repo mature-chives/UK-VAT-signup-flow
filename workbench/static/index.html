@@ -96,7 +96,7 @@
         </div>
         <div class="row">
           <div><label for="field-phone">电话</label><input id="field-phone" data-field="phone"></div>
-          <div><label for="field-uscc">统一社会信用代码</label><input id="field-uscc" data-field="company_registration_number"></div>
+          <div><label for="field-uscc">公司注册号 / 统一社会信用代码</label><input id="field-uscc" data-field="company_registration_number"></div>
         </div>
         <div class="row">
           <div><label for="field-full-name">联系人姓名</label><input id="field-full-name" data-field="full_name"></div>
@@ -106,6 +106,14 @@
           <div><label for="field-vat-reg-date">VAT 注册生效日期</label><input id="field-vat-reg-date" data-field="vat_registration_date" placeholder="YYYY-MM-DD"></div>
           <div><label for="field-incorporation-date">公司成立日期</label><input id="field-incorporation-date" data-field="company_incorporation_date" placeholder="YYYY-MM-DD"></div>
         </div>
+        <div class="row">
+          <div><label>公司地址国家 / 地区</label><input data-field="country" list="country-options"></div>
+          <div><label>个人居住国家 / 地区（VAT）</label><input data-field="home_country" list="country-options"></div>
+        </div>
+        <div class="row">
+          <div><label>公司注册国家 / 地区</label><input data-field="company_registration_country" list="country-options"></div>
+        </div>
+        <p class="hint">地址国家按各自资料填写。海外税号直接使用公司注册号，税号国家使用公司注册国家 / 地区。修改后请保存客户。</p>
       </details>
       <div class="actions">
         <button id="save-customer" type="button">保存客户</button>
@@ -238,6 +246,7 @@
   </section>
 </div>
 
+<datalist id="country-options"><option value="China"><option value="Hong Kong"><option value="Ireland"><option value="United Kingdom"></datalist>
 <script>
 const $ = id => document.getElementById(id);
 const AUTOMATION_KINDS = ["uk_vat", "uk_eori"];
@@ -246,7 +255,7 @@ const FIELD_LABELS = {
   business_name: "公司名",
   email: "邮箱",
   phone: "电话",
-  company_registration_number: "统一社会信用代码",
+  company_registration_number: "公司注册号 / 统一社会信用代码",
   full_name: "姓名",
   first_name: "名",
   last_name: "姓",
@@ -254,7 +263,8 @@ const FIELD_LABELS = {
   vat_contact_email: "VAT 沟通邮箱",
   vat_number: "英国 VAT 号",
   vat_registration_date: "VAT 注册生效日期",
-  company_incorporation_date: "公司成立日期"
+  company_incorporation_date: "公司成立日期",
+  country: "公司地址国家", home_country: "居住国家", company_registration_country: "公司注册地",
 };
 const CATEGORY_LABELS = {
   authorization: "授权表",
@@ -312,9 +322,9 @@ async function api(url, options={}) {
   return body;
 }
 function fieldsFromForm() {
-  const fields = {};
+  const fields = {...(selectedCustomer()?.fields || {})};
   document.querySelectorAll("[data-field]").forEach(input => {
-    if (input.value.trim()) fields[input.dataset.field] = input.value.trim();
+    fields[input.dataset.field] = input.value.trim();
   });
   return fields;
 }

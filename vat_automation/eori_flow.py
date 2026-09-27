@@ -12,8 +12,8 @@ EORI_START_URL = "https://www.gov.uk/eori/apply-for-eori"
 EORI_GUIDE_URL = "https://www.gov.uk/eori"
 EORI_SERVICE_ROOT = "/customs-registration-services/eori-only"
 EORI_REGISTER_PATH = f"{EORI_SERVICE_ROOT}/register"
-# customs 通知邮箱：优先用授权表里的 VAT 沟通邮箱，退回登录邮箱。
-EORI_EMAIL_ANSWER = "doc:vat_contact_email|env:HMRC_EMAIL"
+# customs 通知邮箱：使用人工核对过的资料字段，不自动复用登录邮箱。
+EORI_EMAIL_ANSWER = "doc:vat_contact_email"
 # VAT 注册地址邮编：优先用结构化地址里的 postcode，退回授权表的原始邮编。
 EORI_VAT_POSTCODE_ANSWER = "doc:postcode|doc:business_postcode"
 
@@ -48,9 +48,8 @@ def _rule(
 
 
 def eori_global_answers() -> dict[str, str]:
-    """全局答案：申请人资料、手机号国家都走占位符，不留客户字面量。"""
+    """全局答案仅含申请人资料；地址国家与认证手机号国家分别处理。"""
     return {
-        "Country": "doc:country|env:HMRC_MFA_PHONE_COUNTRY",
         "Business name": "doc:business_name",
         "Full name": "doc:full_name",
         "Telephone": "doc:phone",
@@ -166,10 +165,8 @@ def build_eori_flow_config() -> dict[str, object]:
     return {
         "flow_name": "英国 EORI 注册",
         "start_url": EORI_START_URL,
-        # 新客户没有 Government Gateway 账号，只能边申请边建号；
-        # 客户已有账号（例如我们做过 VAT 注册并留下 User ID/密码）时，
-        # 在网页上把登录方式改成 Government Gateway 即可。
-        "default_sign_in_method": "Create new sign in details",
+        # 默认用已有 Government Gateway 账号登录；没有账号时可在网页切换为建号。
+        "default_sign_in_method": "Government Gateway",
         "profile_dir": ".browser-profile-eori",
         "artifacts_dir": "artifacts-eori",
         "browser_channel": "chrome",

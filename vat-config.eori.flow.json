@@ -1,7 +1,7 @@
 {
   "flow_name": "英国 EORI 注册",
   "start_url": "https://www.gov.uk/eori/apply-for-eori",
-  "default_sign_in_method": "Create new sign in details",
+  "default_sign_in_method": "Government Gateway",
   "profile_dir": ".browser-profile-eori",
   "artifacts_dir": "artifacts-eori",
   "browser_channel": "chrome",
@@ -11,7 +11,6 @@
   "error_hold_seconds": 600,
   "max_steps": 80,
   "answers": {
-    "Country": "doc:country|env:HMRC_MFA_PHONE_COUNTRY",
     "Business name": "doc:business_name",
     "Full name": "doc:full_name",
     "Telephone": "doc:phone"
@@ -22,9 +21,9 @@
         "heading_contains": "What email address can we use for customs notifications"
       },
       "answers": {
-        "What email address can we use for customs notifications?": "doc:vat_contact_email|env:HMRC_EMAIL",
-        "Email address": "doc:vat_contact_email|env:HMRC_EMAIL",
-        "email-address": "doc:vat_contact_email|env:HMRC_EMAIL"
+        "What email address can we use for customs notifications?": "doc:vat_contact_email",
+        "Email address": "doc:vat_contact_email",
+        "email-address": "doc:vat_contact_email"
       },
       "action": "continue"
     },
@@ -33,9 +32,9 @@
         "path_contains": "/customs-registration-services/eori-only/register/matching/what-is-your-email"
       },
       "answers": {
-        "What email address can we use for customs notifications?": "doc:vat_contact_email|env:HMRC_EMAIL",
-        "Email address": "doc:vat_contact_email|env:HMRC_EMAIL",
-        "email-address": "doc:vat_contact_email|env:HMRC_EMAIL"
+        "What email address can we use for customs notifications?": "doc:vat_contact_email",
+        "Email address": "doc:vat_contact_email",
+        "email-address": "doc:vat_contact_email"
       },
       "action": "continue"
     },

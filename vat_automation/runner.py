@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+from .countries import normalize_country
+
 import asyncio
 import json
 import os
 import re
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
+
 from .config import Settings, is_placeholder_chain, normalize
+from .authenticator import AuthenticatorFlow
+from .authenticator_store import AuthenticatorError
 
 
 SAFE_ACTIONS = (
@@ -35,6 +42,29 @@ FINAL_SUBMIT_ACTIONS = (
 )
 
 
+def submission_evidence(url: str, heading: str, text: str) -> tuple[str, str]:
+    """只认可明确的 HMRC 回执；跳离复核页不代表注册成功。"""
+    host = (urlparse(url).hostname or "").lower()
+    if host not in {"www.tax.service.gov.uk", "tax.service.gov.uk"}:
+        return "unverified", ""
+    title = normalize(heading)
+    eori_titles = {"your eori number", "you have been assigned an eori number", "your eori number is"}
+    if title in eori_titles and "eori" in url.lower():
+        match = re.search(r"\bGB\s?\d{12}(?:\d{3})?\b", text, re.I)
+        if match:
+            return "registered", re.sub(r"\s", "", match.group()).upper()
+    received_titles = {
+        "application received", "application submitted", "your application has been submitted",
+        "we have received your application", "your application has been received",
+        "registration application received", "application complete",
+    }
+    if title in received_titles:
+        # 只在回执页且紧跟编号标签时提取；不能把 GG 号或页面中任意数字当申请号。
+        match = re.search(r"(?:application reference(?: number)?|your reference number)\s*[:：]?\s*((?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{5,39})\b", text, re.I)
+        return "received", match.group(1) if match else ""
+    return "unverified", ""
+
+
 def is_skip_edit_action(action: str) -> bool:
     """HMRC 上“我没有 UTR/NINO”一类跳过链接，不是表单提交。"""
     text = normalize(action)
@@ -43,6 +73,8 @@ AUTH_HOSTS = {
     "access.service.gov.uk",
     "www.access.service.gov.uk",
 }
+VAT_EMAIL_PATH = "/register-for-vat/email-address"
+VAT_EMAIL_CODE_PATH = "/register-for-vat/email-address-verification"
 # Chrome 自己的错误页：网络抖动、代理断开时会出现，不是 HMRC 的页面。
 BROWSER_ERROR_URL_PREFIX = "chrome-error://"
 # 中文标题在 normalize() 里会被清空，所以中文单独按原文比对。
@@ -113,9 +145,28 @@ class VatAutomation:
         event_handler: Callable[[dict[str, Any]], Awaitable[None] | None] | None = None,
         audit_context: Mapping[str, str] | None = None,
         document_values: dict[str, str] | Mapping[str, str] | None = None,
+        stop_requested: Callable[[], bool] | None = None,
+        enable_recording: bool = False,
+        browser_ready_provider: Callable[[str, str], Awaitable[None]] | None = None,
+        email_verification_prepare: Callable[[str], Awaitable[None]] | None = None,
+        email_verification_provider: Callable[[str], Awaitable[str]] | None = None,
+        authenticator: AuthenticatorFlow | None = None,
+        vat_email_verification_prepare: Callable[[str], Awaitable[None]] | None = None,
+        vat_email_verification_provider: Callable[[str], Awaitable[str]] | None = None,
     ) -> None:
         self.settings = settings
         self.interactive = interactive
+        self.stop_requested = stop_requested
+        self.stopping = False
+        self.enable_recording = enable_recording
+        self.browser_ready_provider = browser_ready_provider
+        self.email_verification_prepare = email_verification_prepare
+        self.email_verification_provider = email_verification_provider
+        self.vat_email_verification_prepare = vat_email_verification_prepare
+        self.vat_email_verification_provider = vat_email_verification_provider
+        if authenticator is not None and enable_recording:
+            raise ValueError("自动管理 Authenticator 不能与浏览器录制同时启用。")
+        self.authenticator = authenticator
         # 显式传入凭据时不再读取进程环境：多用户 Web 场景下 os.environ 是共享的，
         # 且写进去的密码会被 Playwright 启动的 Chrome 子进程继承。
         self._credentials: Mapping[str, str] = (
@@ -150,6 +201,13 @@ class VatAutomation:
         self.settings.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True)
         self.audit_path = self.settings.artifacts_dir / "audit.jsonl"
+        self.audit_path.touch(mode=0o600, exist_ok=True)
+        self.audit_path.chmod(0o600)
+
+    def _check_stop_requested(self) -> None:
+        requested = getattr(self, "stop_requested", None)
+        if requested is not None and requested():
+            raise asyncio.CancelledError
 
     async def run(self, *, resume: bool = False) -> None:
         try:
@@ -162,34 +220,88 @@ class VatAutomation:
             ) from exc
 
         try:
+            self._check_stop_requested()
             async with async_playwright() as playwright:
                 context = await playwright.chromium.launch_persistent_context(
                     str(self.settings.profile_dir),
                     channel=self.settings.browser_channel or None,
                     headless=self.settings.headless,
                     viewport={"width": 1440, "height": 1000},
+                    args=(
+                        ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"]
+                        if self.enable_recording else []
+                    ),
                 )
                 page = context.pages[0] if context.pages else await context.new_page()
-                target = self._resume_url() if resume else None
-                await page.goto(
-                    target or self.settings.start_url, wait_until="domcontentloaded"
-                )
                 try:
+                    self._check_stop_requested()
+                    if self.enable_recording:
+                        endpoint, target_id = await self._recording_connection(context, page)
+                        if self.browser_ready_provider is not None:
+                            await self.browser_ready_provider(endpoint, target_id)
+                        self._check_stop_requested()
+                    target = self._resume_url() if resume else None
+                    await page.goto(
+                        target or self.settings.start_url, wait_until="domcontentloaded"
+                    )
                     await self._drive(page)
+                except asyncio.CancelledError:
+                    self.stopping = True
+                    # 只记脱敏页面位置，不截取可能带有验证码的登录现场。
+                    with suppress(Exception):
+                        await self._audit(
+                            "run-cancelled", url=page.url, text="用户停止本次注册"
+                        )
+                    raise
                 finally:
-                    await self._save_state(page.url)
-                    await context.close()
+                    self.stopping = True
+                    try:
+                        with suppress(Exception):
+                            await self._save_state(page.url)
+                    finally:
+                        # 页面卡住或保存现场失败，也要关闭本次浏览器。
+                        await asyncio.wait_for(context.close(), timeout=5)
         except PlaywrightError as exc:
             raise RuntimeError(f"浏览器自动化失败：{exc}") from exc
 
+    async def _recording_connection(self, context: Any, page: Any) -> tuple[str, str]:
+        """Chrome 自动分配空闲端口；只发布本机地址及当前申请标签页 ID。"""
+        port_file = self.settings.profile_dir / "DevToolsActivePort"
+        deadline = asyncio.get_running_loop().time() + 5
+        while asyncio.get_running_loop().time() < deadline:
+            self._check_stop_requested()
+            try:
+                port = int(port_file.read_text(encoding="utf-8").splitlines()[0])
+                if 1 <= port <= 65535:
+                    break
+            except (OSError, ValueError, IndexError):
+                pass
+            await asyncio.sleep(0.1)
+        else:
+            raise AutomationStopped("Chrome 未能打开本机录制连接，请重试或关闭录制选项。")
+        endpoint = f"http://127.0.0.1:{port}"
+        # 不使用系统代理，保证检测仅访问本机 Chrome。
+        async with httpx.AsyncClient(trust_env=False, timeout=3) as client:
+            response = await client.get(f"{endpoint}/json/version")
+            response.raise_for_status()
+        session = await context.new_cdp_session(page)
+        try:
+            info = await session.send("Target.getTargetInfo")
+            target_id = str(info["targetInfo"]["targetId"])
+        finally:
+            await session.detach()
+        return endpoint, target_id
+
     async def _drive(self, page: Any) -> None:
         for step in range(1, self.settings.max_steps + 1):
+            self._check_stop_requested()
             await page.wait_for_load_state("domcontentloaded")
             heading = await self._heading(page)
             await self._audit("page", step=step, url=page.url, heading=heading)
             if self.pause_checkpoint_provider is not None:
                 await self.pause_checkpoint_provider(page.url, heading)
             try:
+                self._check_stop_requested()
                 result = await self._step_once(page, heading)
             except SafetyStop:
                 # 安全拦截（测试资料不许写入真实申请）保持立即停止，不留存。
@@ -265,8 +377,25 @@ class VatAutomation:
                 f"远端服务返回 {heading}，请稍后重试或改用非 headless 模式。"
             )
 
+        if self.authenticator is not None:
+            try:
+                if await self.authenticator.handle(
+                    page, heading, self.gateway_user_id or self._credentials.get("HMRC_USER_ID", ""),
+                    click=self._click_auth_action, audit=self._audit,
+                    check_stop=self._check_stop_requested,
+                ):
+                    return False
+            except AuthenticatorError as exc:
+                raise AutomationStopped(str(exc)) from None
+
         if self._is_auth_page(page.url):
-            await self._handle_auth(page, heading)
+            try:
+                await self._handle_auth(page, heading)
+            except AutomationStopped:
+                raise
+            except Exception:
+                # 浏览器错误可能附带密码或验证码输入值，认证阶段只报告固定文案。
+                raise AutomationStopped("认证页面处理失败，请在浏览器中检查后重试。") from None
             return False
 
         if not self.settings.allow_live_application and self._is_application_page(
@@ -281,6 +410,8 @@ class VatAutomation:
         if verification_input is not None:
             await self._enter_verification_code(page, verification_input)
             return False
+        if self.vat_email_verification_provider is not None and self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
+            raise AutomationStopped("未找到 VAT 个人邮箱验证码输入框，已暂停供人工检查。")
 
         if self._is_honesty_declaration_page(page.url):
             await self._handle_honesty_declaration(page, heading)
@@ -352,6 +483,17 @@ class VatAutomation:
             raise AutomationStopped(
                 "当前页面缺少必填配置：" + "；".join(sorted(set(missing)))
             )
+
+        if (self.vat_email_verification_prepare is not None
+                and self._is_vat_email_page(page.url, VAT_EMAIL_PATH)):
+            email_input = page.locator(
+                'main form input[type="email"]:visible, main form input[name="email-address"]:visible'
+            )
+            if await email_input.count() != 1:
+                raise AutomationStopped("VAT 个人邮箱输入框发生变化，已暂停供人工检查。")
+            # 用实际将提交的值校验分配归属，并在点击发码前建立本环节的新游标。
+            await self.vat_email_verification_prepare(await email_input.input_value())
+            self._check_stop_requested()
 
         clicked = (
             await self._click_safe_action(page)
@@ -507,6 +649,11 @@ class VatAutomation:
                 raise AutomationStopped("创建登录凭据需要环境变量 HMRC_EMAIL。")
             await email_input.fill(email)
             await self._audit("auth-email-filled", url=page.url)
+            # 必须在触发发码之前记游标；只接已知 GG 建号邮箱页，不推断其他验证。
+            if (urlparse(page.url).path.rstrip("/") == "/registration/email"
+                    and self.email_verification_prepare is not None):
+                await self.email_verification_prepare(email)
+                self._check_stop_requested()
             if not await self._click_auth_action(page, ("Continue",)):
                 raise AutomationStopped("邮箱页面未找到继续按钮。")
             return
@@ -543,25 +690,9 @@ class VatAutomation:
             "/multi-factor/enter-mobile-country/" in page.url
             or "country for this mobile phone number" in normalize(heading)
         ):
-            found, configured_country = self.settings.answer_for(
-                "Country",
-                page.url,
-                heading,
-                document_values=self.document_values,
-            )
-            if found:
-                try:
-                    configured_country = self._resolve_value(configured_country)
-                except KeyError:
-                    configured_country = ""
-            country = self._credentials.get(
-                "HMRC_MFA_PHONE_COUNTRY",
-                str(configured_country) if found and configured_country else "",
-            )
+            country = normalize_country(self._credentials.get("HMRC_MFA_PHONE_COUNTRY", ""))
             if not country:
-                raise AutomationStopped(
-                    "非英国手机号需要 HMRC_MFA_PHONE_COUNTRY 或配置中的 Country。"
-                )
+                raise AutomationStopped("非英国手机号需要明确填写 HMRC_MFA_PHONE_COUNTRY。")
             country_input = page.locator(
                 'main form input[type="text"]:visible, '
                 'main form input:not([type]):visible'
@@ -584,7 +715,8 @@ class VatAutomation:
         ).first
         heading_normalized = normalize(heading)
         if await code_input.count():
-            if not self.interactive and self.verification_code_provider is None:
+            if (not self.interactive and self.verification_code_provider is None
+                    and self.email_verification_provider is None):
                 raise AutomationStopped("验证码页面需要用户输入验证码。")
             await self._enter_verification_code(page, code_input)
             return
@@ -623,7 +755,10 @@ class VatAutomation:
                 "/multi-factor/mobile-number-uk/" in page.url
                 or "adding a uk mobile number" in heading_normalized
             ):
-                method = self._credentials.get("HMRC_MFA_PHONE_IS_UK", "Yes")
+                country = normalize_country(self._credentials.get("HMRC_MFA_PHONE_COUNTRY", ""))
+                method = "Yes" if country == "United Kingdom" else "No" if country else self._credentials.get("HMRC_MFA_PHONE_IS_UK", "")
+                if method not in {"Yes", "No"}:
+                    raise AutomationStopped("请明确确认短信验证手机号国家，不能自动判断是否为英国号码。")
                 audit_event = "mfa-phone-country-selected"
             else:
                 method = self._credentials.get("HMRC_MFA_METHOD", "Text message")
@@ -654,7 +789,7 @@ class VatAutomation:
         raise AutomationStopped("无法识别当前认证页面，已保存截图供检查。")
 
     async def _verification_code_input(self, page: Any, heading: str) -> Any | None:
-        if "code" not in normalize(heading):
+        if "code" not in normalize(heading) and not self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
             return None
         locator = page.locator(
             'main form input[autocomplete="one-time-code"]:visible, '
@@ -665,7 +800,14 @@ class VatAutomation:
 
     async def _enter_verification_code(self, page: Any, code_input: Any) -> None:
         heading = await self._heading(page)
-        if self.verification_code_provider is not None:
+        if (self.email_verification_provider is not None
+                and self._is_auth_page(page.url)
+                and urlparse(page.url).path.rstrip("/") == "/registration/code"):
+            code = await self.email_verification_provider(heading)
+        elif (self.vat_email_verification_provider is not None
+                and self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH)):
+            code = await self.vat_email_verification_provider(heading)
+        elif self.verification_code_provider is not None:
             code = await self.verification_code_provider(heading)
         elif self.interactive:
             code = await asyncio.to_thread(
@@ -677,17 +819,25 @@ class VatAutomation:
             raise AutomationStopped("用户在验证码阶段退出。")
         if not code.strip():
             raise AutomationStopped("验证码为空。")
-        await code_input.fill(code.strip())
-        await self._audit("verification-code-entered", url=page.url)
-        if not await self._click_auth_action(
-            page, ("Save and continue", "Continue", "Submit", "Confirm", "Sign in")
-        ):
-            raise AutomationStopped("验证码页面未找到继续按钮。")
+        self._check_stop_requested()
+        try:
+            await code_input.fill(code.strip())
+            await self._audit("verification-code-entered", url=page.url)
+            if not await self._click_auth_action(
+                page, ("Save and continue", "Continue", "Submit", "Confirm", "Sign in")
+            ):
+                raise AutomationStopped("验证码页面未找到继续按钮。")
+        except AutomationStopped:
+            raise
+        except Exception:
+            # VAT 验证页不在 GG 域名上，同样不能让浏览器错误附带输入值进入日志。
+            raise AutomationStopped("验证码填写或提交失败，请在浏览器中检查后重试。") from None
 
     async def _click_auth_action(self, page: Any, names: tuple[str, ...]) -> bool:
         for name in names:
             button = page.get_by_role("button", name=name, exact=True)
             if await button.count() and await button.first.is_visible():
+                self._check_stop_requested()
                 await button.first.click()
                 return True
         return False
@@ -886,15 +1036,14 @@ class VatAutomation:
         await page.wait_for_timeout(250)
         options = page.get_by_role("option")
         if not await options.count():
-            return
-        exact = page.get_by_role("option", name=value, exact=True)
-        if await exact.count() and await exact.first.is_visible():
-            await exact.first.click()
-            return
+            raise AutomationStopped("未出现可确认的下拉候选项，请核对页面后再继续。")
+        matches = []
         for option in await options.all():
-            if await option.is_visible():
-                await option.click()
-                return
+            if await option.is_visible() and normalize_country(await option.inner_text()) == normalize_country(value):
+                matches.append(option)
+        if len(matches) != 1:
+            raise AutomationStopped("下拉候选项无法唯一匹配填写值，请核对国家/地区或页面选项。")
+        await matches[0].click()
 
     @staticmethod
     def _locator(page: Any, control: Control) -> Any:
@@ -914,6 +1063,7 @@ class VatAutomation:
                 locator = page.get_by_role(role, name=name, exact=True)
                 if await locator.count() and await locator.first.is_visible():
                     await self._audit("click", text=name, url=page.url)
+                    self._check_stop_requested()
                     await locator.first.click()
                     return True
         return False
@@ -923,6 +1073,7 @@ class VatAutomation:
             locator = page.get_by_role(role, name=name, exact=True)
             if await locator.count() and await locator.first.is_visible():
                 await self._audit("click", text=name, url=page.url)
+                self._check_stop_requested()
                 await locator.first.click()
                 return True
         # HMRC 文案会混用直撇号和弯撇号，例如 company's / company’s。
@@ -935,6 +1086,7 @@ class VatAutomation:
                 text = (await locator.inner_text()).strip()
                 if normalize(text) == wanted:
                     await self._audit("click", text=text, url=page.url)
+                    self._check_stop_requested()
                     await locator.click()
                     return True
         return False
@@ -1051,6 +1203,7 @@ class VatAutomation:
                 page, target, changes
             )
 
+        self._check_stop_requested()
         await self._audit("final-review-confirmed", url=page.url)
         action = ""
         for candidate in FINAL_SUBMIT_ACTIONS:
@@ -1492,11 +1645,31 @@ class VatAutomation:
                 "申请可能尚未提交，请人工检查。"
             )
         await self._audit(
-            "application-submitted", action=action, url=page.url, heading=heading
+            "application-submitted", action=action, url=page.url, heading=heading,
+            **await self._submission_receipt(page, heading),
         )
 
+    async def _submission_receipt(self, page: Any, heading: str) -> dict[str, str]:
+        result = {"outcome": "unverified", "reference": ""}
+        try:
+            text = await page.locator("body").inner_text()
+            result["outcome"], result["reference"] = submission_evidence(page.url, heading, text)
+        except Exception:
+            pass
+        try:
+            result["receipt_png"] = str(await self._snapshot(page, heading, reason="submission-receipt"))
+            pdf = await self._save_page_pdf(page, "submission-receipt")
+            if pdf:
+                result["receipt_pdf"] = str(pdf)
+        except Exception:
+            # 回执存档失败不能触发再次提交；结果仍可显示待核实。
+            pass
+        return result
+
     async def _save_page_pdf(self, page: Any, reason: str) -> Path | None:
-        """整页存成 PDF 供核对和打印。失败时返回 None，由整页截图兜底。"""
+        """整页存成 PDF 供核对和打印；认证页不存档。"""
+        if self._is_auth_page(page.url) or self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
+            return None
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         target = self.settings.artifacts_dir / f"{stamp}-{reason}.pdf"
         try:
@@ -1514,6 +1687,13 @@ class VatAutomation:
     async def _heading(page: Any) -> str:
         heading = page.locator("h1").first
         return (await heading.inner_text()).strip() if await heading.count() else ""
+
+    @staticmethod
+    def _is_vat_email_page(url: str, path: str) -> bool:
+        parsed = urlparse(url)
+        return (parsed.scheme == "https"
+                and parsed.hostname in {"tax.service.gov.uk", "www.tax.service.gov.uk"}
+                and parsed.path.rstrip("/") == path)
 
     @staticmethod
     def _is_auth_page(url: str) -> bool:
@@ -1579,7 +1759,18 @@ class VatAutomation:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         png = self.settings.artifacts_dir / f"{stamp}-{reason}.png"
         metadata = self.settings.artifacts_dir / "current-page.json"
-        await page.screenshot(path=str(png), full_page=True)
+        if self._is_auth_page(page.url) or self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
+            # 整页遮盖：设置密钥可能同时出现在二维码、文本和输入框中。
+            from PIL import Image, ImageDraw
+            placeholder = Image.new("RGB", (960, 160), "#f1f5f9")
+            ImageDraw.Draw(placeholder).text(
+                (24, 60), "Authentication page hidden. Inspect the local browser to continue.",
+                fill="#334155",
+            )
+            png.touch(mode=0o600, exist_ok=True)
+            placeholder.save(png)
+        else:
+            await page.screenshot(path=str(png), full_page=True)
         png.chmod(0o600)
         metadata.write_text(
             json.dumps(
@@ -1595,6 +1786,7 @@ class VatAutomation:
             ),
             encoding="utf-8",
         )
+        metadata.chmod(0o600)
         return png
 
     async def _audit(self, event: str, **details: Any) -> None:
@@ -1614,6 +1806,11 @@ class VatAutomation:
                 await result
 
     async def _save_state(self, url: str) -> None:
+        if self._is_auth_page(url):
+            # 身份认证 URL 常带一次性会话标识，不保存为可恢复断点。
+            url = self.settings.start_url
+        elif self._is_vat_email_page(url, VAT_EMAIL_CODE_PATH):
+            url = _safe_url(url)
         state = self.settings.artifacts_dir / "state.json"
         state.write_text(
             json.dumps({"url": url}, ensure_ascii=False, indent=2),

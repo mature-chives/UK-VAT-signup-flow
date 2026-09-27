@@ -38,6 +38,7 @@ vat_automation/        # 核心自动化包
   document_parser.py   # 从 PDF/DOCX/XLSX/TXT 等本地提取 VAT 字段（不调用外部 AI/API）
   customer_store.py    # 公共公司索引、用户私有申请空间及办理记录
   company_identity.py  # 公司身份归一化、USCC 校验和香港 BRN 识别
+  countries.py         # 国家字段归一化及明确地址国家片段识别
   credential_store.py  # 本机私有 HMRC 凭据存储
   mail_pool.py          # 独立邮箱分配、租约与本机 SQLite 状态
   mail_verification.py  # 验证邮件匹配和轮询；skymail.py 为邮箱接口客户端
@@ -113,7 +114,7 @@ python scripts/check_flow_coverage.py vat-config.flow.json       # 84 个截图�
 python scripts/check_flow_coverage.py vat-config.test.json
 ```
 
-2026-09-27 已有运行记录：242 项测试，241 通过、1 失败；`test_auth_resume_state_keeps_current_url` 仍要求恢复原认证 URL，而 `_save_state()` 已改为保存起始 URL，预期尚待统一。同次 VAT 覆盖记录为 84/84。本次文档更新未重跑测试或检查。
+2026-09-27 国家/税号改造之前的运行记录（不代表改造后的测试状态）：242 项测试，241 通过、1 失败；`test_auth_resume_state_keeps_current_url` 仍要求恢复原认证 URL，而 `_save_state()` 已改为保存起始 URL，预期尚待统一。同次 VAT 覆盖记录为 84/84。本次文档更新未重跑测试或检查。
 
 注意：覆盖检查的 "covered" 只表示有规则映射，不代表在真实 HMRC 环境提交验证过。
 
@@ -142,7 +143,9 @@ python scripts/check_flow_coverage.py vat-config.test.json
 - vat-bench 保持共享客户协作模型；vat-web 的公司隔离、邮箱池和 Authenticator 界面能力不能直接视为工作台已具备。
 - 执行结束与业务成功分开：仅明确回执可判为 HMRC 已接收，明确 EORI 分配页及有效编号才判为已取得 EORI；其余结果待核实，服务重启不自动重提。
 - [公司关联与申请隔离](docs/customer-isolation.md)、[邮箱池](docs/mail-pool.md)、[Authenticator](docs/authenticator.md) 描述新增能力及私有存储边界。Authenticator 文档明确尚未完成真实 HMRC 绑定/登录验证。
-- [历史交接与多国家待办](docs/kimi-handoff.md)：仍有 China 默认值和注册号用于税号的逻辑，不能宣称全面支持不同国家分支。
+- [历史交接与多国家待办](docs/kimi-handoff.md)：当前已修改地址国家默认值、税号国家固定值；按用户要求未运行测试或检查。地址拆分、邮编和不同国家分支仍待完善。
+- **已确认业务规则：VAT 海外税号直接填写公司注册号**（`company_registration_number`），有号码即选择 Yes；不拆分税号字段，不增加有／没有／未确认选项。税号国家使用公司注册地（`company_registration_country`），不固定为 China。未经用户要求不要再次改为独立税号模型。两个网页入口启动、vat-web 暂停后继续均调用 `validate_application_values()` 校验地址国家。
+- 新建账号以 vat-web 自动管理 Authenticator 为主要使用方式；用户已要求移除新增的短信手机号国家输入和启动必填校验，短信备用方式保留原有设置。不要再次增加国家确认步骤，申请联系手机号与短信验证手机号分别处理。
 - [AI 辅助维护待办](docs/ai-assisted-maintenance-todo.md) 仅为计划，未实现运行时 AI 自动操作。
 
 ## 部署形态

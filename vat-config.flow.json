@@ -10,7 +10,6 @@
   "max_steps": 250,
   "answers": {
     "Why do you want to register the business for VAT?": "It’s selling goods or services and needs or wants to charge VAT to customers",
-    "Country": "China",
     "Business name": "doc:business_name",
     "Trading name": "doc:trading_name",
     "Full name": "doc:full_name",
@@ -150,8 +149,8 @@
         "path_contains": "/overseas-tax-identifier-country"
       },
       "answers": {
-        "countryAutocomplete": "China",
-        "country": "China"
+        "countryAutocomplete": "doc:company_registration_country",
+        "country": "doc:company_registration_country"
       },
       "action": "continue"
     },

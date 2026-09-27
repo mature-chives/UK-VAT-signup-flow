@@ -30,7 +30,6 @@ def flow_global_answers() -> dict[str, str]:
         "Why do you want to register the business for VAT?": (
             "It’s selling goods or services and needs or wants to charge VAT to customers"
         ),
-        "Country": "China",
         "Business name": "doc:business_name",
         "Trading name": "doc:trading_name",
         "Full name": "doc:full_name",
@@ -93,7 +92,7 @@ def flow_page_rules() -> list[dict[str, object]]:
         ),
         _rule(
             "/overseas-tax-identifier-country",
-            answers={"countryAutocomplete": "China", "country": "China"},
+            answers={"countryAutocomplete": "doc:company_registration_country", "country": "doc:company_registration_country"},
         ),
         _rule(
             "/identify-your-sole-trader-business/",

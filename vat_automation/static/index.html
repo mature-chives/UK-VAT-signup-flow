@@ -7,6 +7,7 @@
   <style>
     :root { color-scheme:light; --ink:#18212b; --muted:#66717d; --blue:#1d70b8; --green:#00703c; --red:#d4351c; --bg:#f3f5f7; --line:#d6dbe0; }
     * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
     body { margin:0; background:var(--bg); color:var(--ink); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
     header { background:#0b0c0c; color:white; padding:18px 0; }
     header div,main { width:min(1080px,calc(100% - 32px)); margin:auto; }
@@ -14,7 +15,12 @@
     header strong { font-size:22px; }
     header .who { font-size:14px; color:#c9ced3; }
     header button { margin:0; padding:6px 14px; background:transparent; border:1px solid #6d7378; color:white; border-radius:3px; font:600 14px inherit; cursor:pointer; box-shadow:none; }
-    main { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(300px,.65fr); gap:24px; padding:32px 0 56px; }
+    main { display:grid; grid-template-columns:minmax(0,1fr); gap:22px; padding:24px 0 56px; }
+    .business-menu { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:12px; }
+    .business-menu a { flex:1; min-width:180px; padding:16px 20px; background:white; border:2px solid var(--line); border-radius:8px; color:var(--ink); font-weight:700; text-decoration:none; }
+    .business-menu a:hover { border-color:var(--blue); }
+    .business-menu a[aria-current=page] { background:#eaf4fb; border-color:var(--blue); color:#124b7b; }
+    .business-menu a:focus-visible { outline:3px solid #ffdd00; outline-offset:2px; }
     .card { background:white; border:1px solid var(--line); border-radius:10px; padding:24px; box-shadow:0 2px 10px #0000000d; }
     h1,h2,h3 { margin:0 0 16px; line-height:1.25; } h1 { font-size:30px; } h2 { font-size:21px; } h3 { font-size:18px; margin-top:26px; }
     label { display:block; font-weight:650; margin:14px 0 6px; }
@@ -59,10 +65,17 @@
     .status { border-left:6px solid var(--blue); padding:13px 15px; background:#eaf4fb; margin-bottom:18px; }
     .status.waiting_code { border-color:#f47738; background:#fff3e8; }
     .status.pausing,.status.paused { border-color:#ffdd00; background:#fff7bf; }
+    .status.stopping { border-color:#f47738; background:#fff3e8; }
+    .status.waiting_recorder { border-color:var(--blue); background:#eaf4fb; }
     .status.reviewing,.status.editing { border-color:#4c2c92; background:#efeaf7; }
     .status.failed,.status.stopped { border-color:var(--red); background:#fbeaea; }
     .status.completed { border-color:var(--green); background:#e8f4ee; }
+    .status.needs-verification { border-color:#f47738; background:#fff3e8; }
     #otp { display:none; padding:16px; border:2px solid #f47738; margin:18px 0; background:#fff9f3; }
+    #authenticator-qr-card { border:2px solid #1d70b8; background:#f4f9ff; }
+    .authenticator-qr-layout { display:flex; gap:24px; align-items:center; flex-wrap:wrap; }
+    #authenticator-qr-image { width:224px; height:224px; padding:16px; background:white; object-fit:contain; image-rendering:pixelated; }
+    .authenticator-qr-copy { flex:1; min-width:220px; }
     #busy { display:none; padding:12px 14px; margin-bottom:16px; font-size:14px; background:#fff7bf; border-left:5px solid #ffdd00; }
     #review { display:none; margin-top:24px; }
     .review-download { display:inline-block; margin:4px 0 10px; font-weight:700; }
@@ -75,47 +88,141 @@
     .review-subject { margin:16px 0 4px; font-weight:700; }
     .events { max-height:360px; overflow:auto; padding:0; list-style:none; border-top:1px solid var(--line); }
     .events li { padding:9px 0; border-bottom:1px solid var(--line); font-size:13px; }
+    .workflow-steps { display:flex; gap:14px; align-items:center; font-size:14px; color:var(--muted); }
+    .workflow-steps [aria-current=step] { color:var(--blue); font-weight:700; }
+    .plain-fieldset { min-width:0; margin:0; padding:0; border:0; }
+    .start-actions { position:sticky; bottom:0; z-index:2; padding:14px 0 8px; background:white; border-top:1px solid var(--line); margin-top:20px; }
+    .start-actions button { margin-top:0; }
+    .task-toolbar { position:sticky; top:0; z-index:5; display:flex; gap:16px; align-items:center; justify-content:space-between; padding:16px 20px; border:1px solid var(--line); background:white; border-radius:8px; box-shadow:0 3px 10px #0000000d; }
+    .task-toolbar h1 { font-size:24px; margin:0; }
+    #task-primary, #task-data, #task-data-label, #preparation-title { scroll-margin-top:150px; }
+    #stop-message:empty, #pause-error:empty { display:none; }
+    .task-toolbar .hint { margin:3px 0 0; }
+    .task-buttons { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+    .task-buttons button { margin:0; font-size:14px; padding:10px 14px; }
+    .task-status { margin:18px 0; }
+    .task-status .status { margin:0; font-size:18px; }
+    .task-grid { display:grid; grid-template-columns:minmax(0,1fr) 280px; align-items:start; gap:20px; }
+    .task-grid > * { min-width:0; }
+    .task-grid h2 { font-size:20px; }
+    .task-summary strong { overflow-wrap:anywhere; }
+    .task-summary button { width:100%; }
+    .task-summary .hint { margin-top:12px; }
+    #task-data { margin-top:20px; padding:18px 20px; }
+    #task-data #preparation-panel { padding:20px 0 0; border:0; box-shadow:none; }
+    #task-data #preparation-title { font-size:22px; }
+    #task-data .preparation-only { display:none; }
+    #task-data #start-form { display:none; }
+    #task-data:not([data-editable=true]) #source-controls,
+    #task-data:not([data-editable=true]) #confirm-extraction { display:none; }
+    #task-data-note { margin:12px 0 0; }
+    .task-log { margin-top:20px; }
+    .task-log-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .task-log-heading h2 { margin:0; }
+    #events-toggle { margin:0; font-size:13px; padding:6px 12px; }
+    #run-view #review { margin-top:18px; }
+    #run-view #recording-panel h3, #run-view #error-hold h3 { margin-top:18px; }
+    #admin-tools { margin:0; }
+    #connection-error { margin:0; }
+    #customer-active:empty, #customer-message:empty { display:none; }
+    .run-record { border-top:1px solid var(--line); padding:14px 0; overflow-wrap:anywhere; }
+    .run-record p { margin:6px 0; }
+    .run-record a { display:inline-block; margin-right:16px; }
+    #customer-history { margin:0; }
+    #task-result { margin-bottom:20px; }
+    #task-result .run-record { border-top:0; padding:0; }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+    @media (max-width:800px) {
+      .task-grid { grid-template-columns:minmax(0,1fr); }
+      .task-toolbar { padding:12px; align-items:flex-start; }
+      .task-toolbar h1 { font-size:20px; }
+      .task-toolbar .hint { display:none; }
+      .task-buttons { gap:6px; }
+      .task-buttons button { font-size:13px; padding:8px 10px; }
+      .card { padding:18px; }
+      .workflow-steps { font-size:13px; gap:9px; }
+    }
     @media (max-width:800px) { main { grid-template-columns:1fr; } .row,.fields { grid-template-columns:1fr; } .fields .wide { grid-column:auto; } .review-row { grid-template-columns:1fr; gap:6px; } .group-grid { grid-template-columns:1fr; } .group-grid .wide { grid-column:auto; } }
   </style>
 </head>
 <body>
-<header><div><strong id="brand">GOV.UK 注册助手 · 局域网私有版</strong><span><span id="who" class="who"></span> <button id="logout" type="button">退出</button></span></div></header>
+<header><div><strong id="brand">GOV.UK 注册助手</strong><span><span id="who" class="who"></span> <button id="logout" type="button">退出</button></span></div></header>
 <main>
-  <section class="card">
-    <h1>准备注册资料</h1>
-    <p class="hint" id="flow-banner"></p>
-    <div class="notice local">资料文档只在服务器本机解析，不调用外部 AI 或云端 API。身份证明按账号隔离保存在权限 0700 的私有临时目录，程序退出时删除。</div>
-    <div id="busy"></div>
+  <nav id="business-menu" class="business-menu" aria-label="注册业务"><span class="hint">正在加载业务菜单…</span></nav>
+  <div id="customer-active" class="hint"></div>
+  <div id="customer-message" class="message" role="status"></div>
+  <nav class="workflow-steps" aria-label="注册阶段">
+    <span id="prepare-step" aria-current="step">① 准备资料</span><span aria-hidden="true">→</span><span id="run-step">② 执行注册 / 查看结果</span>
+  </nav>
+  <div id="connection-error" class="notice" role="alert" hidden></div>
+  <div id="busy"></div>
+  <div id="preparation-slot">
+  <section class="card" id="preparation-panel">
+    <h1 id="preparation-title" tabindex="-1">准备注册资料</h1>
+    <p class="hint preparation-only">直接上传资料即可，无需新建客户。确认资料时自动关联公司；换公司会清除上一次的账号输入，已保存的申请仍可继续办理。</p>
+    <p class="hint preparation-only" id="flow-banner"></p>
+    <div class="notice local preparation-only">资料仅在本系统内识别，不发送给外部识别服务。证件仅本人账号可访问，程序退出后删除临时文件。</div>
+    <fieldset id="preparation-fields" class="plain-fieldset" aria-label="客户注册资料" disabled>
+
+    <details class="preparation-only"><summary>检索已有公司（可选，仅公司基础信息）</summary>
+      <label for="company-search">公司名称 / 统一社会信用代码 / 香港商业登记号码</label><input id="company-search" maxlength="200" autocomplete="off">
+      <button id="company-search-button" type="button" class="secondary">检索</button>
+      <p class="hint">同事可检索公司名称、注册地和登记号码，不会看到你的登录信息、证件或完整申请资料。</p>
+      <div id="company-search-results"></div>
+    </details>
 
     <div>
-      <h2>1. 解析客户资料文档</h2>
+      <div id="source-controls">
+      <h2>1. 上传客户资料</h2>
       <input id="source-document" type="file" accept=".pdf,.docx,.xlsx,.txt,.json,.csv,.tsv">
-      <div class="hint">支持 PDF、DOCX、XLSX、TXT、JSON、CSV、TSV，最大 12MB。建议使用“字段名: 值”格式。</div>
-      <button id="parse-document" class="secondary" type="button">解析文档</button>
+      <div class="hint">选择文件后自动识别，请核对下方结果。支持 Excel（.xlsx）、Word（.docx）、PDF，最大 12MB。旧版 .xls 请先另存为 .xlsx。</div>
+      <details class="sub-details"><summary>其他支持格式</summary><p class="hint">也支持 TXT、JSON、CSV、TSV。</p></details>
+      <button id="parse-document" class="secondary" type="button" disabled>重新识别</button>
+      </div>
       <div id="parse-message" class="message"></div>
       <ul id="parse-warnings" class="warnings"></ul>
       <div id="extracted-groups"></div>
+      <div id="company-association" class="notice" hidden role="status"></div>
+      <label id="company-independent-label" hidden><input id="company-independent" type="checkbox" style="width:auto"> 已核对提示，本次仅作为独立申请，不关联或覆盖已有公司</label>
       <button id="confirm-extraction" type="button" disabled>确认资料无误</button>
       <div id="confirm-message" class="message"></div>
     </div>
 
     <form id="start-form">
+      <p id="company-login-hint" class="hint">请先确认上方公司资料，再保存登录信息或上传证件。</p>
       <div class="section">
-        <h2>2. HMRC 登录（收验证码）</h2>
-        <div class="row">
-          <div><label for="email">登录邮箱（收验证码）</label><input id="email" type="email" autocomplete="email"></div>
-          <div><label for="phone">登录手机号（收短信验证码）</label><input id="phone" type="tel" autocomplete="tel"></div>
+        <h2>2. 英国税务账号</h2>
+        <label for="method">登录方式</label>
+        <select id="method"><option value="Create new sign in details">注册新税务账号</option><option value="Government Gateway">使用已有税务账号</option></select>
+        <div class="hint" id="method-hint"></div>
+        <div id="existing-account-fields" hidden>
+          <label for="user-id">税务登录账号（GG）</label><input id="user-id" type="text" inputmode="numeric" autocomplete="off" disabled>
         </div>
-        <label for="password">HMRC 登录密码</label>
+        <div id="imported-gateway-box" hidden>
+          <p id="imported-gateway-hint" class="hint"></p>
+        </div>
+        <div id="new-account-fields">
+          <label><input id="use-mail-pool" type="checkbox" style="width:auto" disabled> 自动分配注册邮箱</label>
+          <p id="mail-pool-hint" class="hint">正在读取邮箱设置…</p>
+          <div class="row">
+            <div><label for="email">注册邮箱（接收验证码）</label><input id="email" type="email" autocomplete="email"></div>
+            <div id="signup-phone-field"><label for="phone">开户验证手机号（接收短信验证码）</label><input id="phone" type="tel" autocomplete="tel"></div>
+          </div>
+          <label for="signup-name">注册姓名</label><input id="signup-name" autocomplete="name">
+          <div class="hint">默认使用资料中的联系人姓名。以上信息用于注册税务账号；验证手机号默认使用中国号码。</div>
+        </div>
+        <label><input id="use-authenticator" type="checkbox" style="width:auto"> 自动处理动态验证码</label>
+        <div id="authenticator-hint" class="hint">新账号会自动设置验证器，并显示二维码供手机添加。已有账号仅在本系统已保存对应验证器时自动填码，否则需手动输入。</div>
+        <div id="authenticator-status" class="hint"></div>
+        <label for="password">税务登录密码</label>
         <input id="password" type="password" autocomplete="new-password">
-        <div class="hint">以上仅用于登录 HMRC / 创建新的 Government Gateway 账号，不会写进申请，也不出现在 Check your answers。手机号国家默认 China，“是否英国手机号”默认 No。</div>
-        <div class="hint" id="credential-hint">登录信息会保存在本机私有存储里（0600），下次启动留空即用。</div>
+        <div class="hint" id="credential-hint">可保存当前公司的登录信息，下次办理时使用。</div>
         <div id="gateway-box" hidden>
-          <p class="hint">新建的 Government Gateway User ID：<b id="gateway-user-id"></b>（HMRC 页面上是两位一组显示，如 33 19 56 57 67 51）。</p>
-          <label for="gateway-user-id-input">核对 / 修改 User ID（12 位数字，保存前请和 HMRC 页面或邮件核对）</label>
+          <p class="hint">税务登录账号（GG）：<b id="gateway-user-id"></b></p>
+          <label for="gateway-user-id-input">核对 / 修改账号（12 位数字，请与官方页面或邮件核对）</label>
           <input id="gateway-user-id-input" autocomplete="off" inputmode="numeric">
         </div>
-        <button id="save-credentials" class="secondary" type="button">保存我的 HMRC 登录信息</button>
+        <button id="save-credentials" class="secondary" type="button">保存登录信息</button>
         <button id="clear-credentials" class="secondary" type="button" hidden>清除已保存的登录信息</button>
         <div id="save-credentials-message" class="message"></div>
       </div>
@@ -124,31 +231,35 @@
         <h2 id="identity-title">3. 三份身份证明</h2>
         <input id="identity-files" type="file" multiple accept=".jpg,.jpeg,.bmp,.png,.pdf,.doc,.docx,.xls,.xlsx,.gif,.txt">
         <div class="hint" id="identity-hint">必须一次选择正好 3 份，每份最大 25MB。文件仅供后续 HMRC 页面自动上传。</div>
-        <button id="save-identity" class="secondary" type="button">保存到服务器私有临时区</button>
+        <button id="save-identity" class="secondary" type="button">上传身份证明</button>
         <div id="identity-message" class="message"></div>
       </div>
 
-      <details>
-        <summary>高级设置</summary>
+      <details data-admin-only hidden>
+        <summary>管理员设置</summary>
         <label for="config">配置文件（由服务端启动参数固定）</label><input id="config" readonly>
-        <label for="method">登录方式</label>
-        <select id="method"><option>Create new sign in details</option><option>Government Gateway</option></select>
-        <div class="hint" id="method-hint">新客户选 <b>Create new sign in details</b>：程序会自动建 Government Gateway 账号（需要邮箱、手机、密码）。客户已有账号才选 <b>Government Gateway</b>：需要 Gateway User ID 和密码。</div>
-        <label for="user-id">Gateway User ID（已有账号才填）</label><input id="user-id" autocomplete="off">
         <label><input id="fresh" type="checkbox" checked style="width:auto"> 每次使用全新浏览器会话</label>
+        <p id="mail-pool-diagnostics" class="hint"></p>
+        <div id="recording-admin-settings" hidden>
+          <label><input id="enable-recording" type="checkbox" style="width:auto" disabled> 允许录制本次浏览器操作（仅管理员）</label>
+          <div class="hint">默认关闭。开启后使用全新浏览器，等待你连接录制器再开始注册；仅运行服务的电脑可连接。此选项不会自动开始录制。</div>
+        </div>
       </details>
 
-      <button id="start" type="submit">开始自动化注册</button>
+      <div class="start-actions">
+      <button id="start" type="submit" disabled>开始办理</button>
+      <p class="hint">开始后自动显示办理进度；需要你操作时会提示。正式提交前仍需你核对确认。</p>
       <div id="form-error" class="message error"></div>
+      </div>
     </form>
-
+    </fieldset>
     <div id="review" class="section">
       <h2>最终核对</h2>
       <div class="notice">请逐项核对下方与 HMRC 核对页一致的内容。确认操作不可撤销：确认后程序会点击 HMRC 的提交按钮，正式提交申请。</div>
       <a id="review-download" class="review-download" href="/api/final-review/pdf" download>存档：下载完整 PDF</a>
       <div id="review-changes"></div>
       <div id="remote-edit" style="display:none">
-        <h3 id="remote-edit-heading">远程修改 HMRC 信息</h3>
+        <h3 id="remote-edit-heading">修改申请信息</h3>
         <ul id="remote-edit-errors" class="warnings"></ul>
         <div id="remote-edit-fields" class="fields"></div>
         <label for="remote-edit-action">下一步操作</label>
@@ -162,35 +273,99 @@
       <div id="review-message" class="message"></div>
     </div>
   </section>
+  </div>
 
-  <aside class="card">
-    <h2>运行状态</h2>
-    <div id="status" class="status">尚未启动</div>
+  <section id="run-view" hidden aria-label="注册任务工作区">
+    <div class="task-toolbar">
+      <div><h1 id="task-title" tabindex="-1">注册任务</h1><p class="hint" id="task-phase"></p></div>
+      <div class="task-buttons">
+        <button id="pause" class="secondary" type="button" disabled>暂停并修改资料</button>
+        <button id="continue" type="button" disabled hidden>应用修改并继续</button>
+        <button id="stop" class="danger" type="button" disabled>停止本次注册</button>
+        <button id="back-to-prepare" class="secondary" type="button" hidden>重新办理本公司</button>
+        <button id="switch-customer" class="secondary" type="button" hidden>办理另一家公司</button>
+      </div>
+    </div>
+    <div class="task-status"><div id="status" class="status" role="status" aria-live="polite">尚未启动</div></div>
+    <p id="pool-email-status" class="hint" hidden></p>
+    <section id="authenticator-qr-card" class="card" hidden aria-labelledby="authenticator-qr-title">
+      <h2 id="authenticator-qr-title">请用手机添加 Authenticator</h2>
+      <div class="authenticator-qr-layout">
+        <img id="authenticator-qr-image" alt="本次 GG 的 Authenticator 设置二维码" hidden>
+        <div class="authenticator-qr-copy">
+          <p id="authenticator-qr-account"></p>
+          <p>打开手机上的 Google Authenticator 或 Microsoft Authenticator，选择「添加账号」→「扫描二维码」。建议用公司名称和 GG 尾号命名，方便以后自行登录。</p>
+          <p>无需在这里填写手机验证码或确认，注册流程会自动继续。</p>
+          <p id="authenticator-qr-message" class="hint" role="status"></p>
+          <p class="hint">二维码仅临时展示 5 分钟，任务结束后关闭。它包含登录密钥，请勿截图、转发或分享屏幕。</p>
+          <button id="authenticator-qr-close" class="secondary" type="button">关闭二维码</button>
+        </div>
+      </div>
+    </section>
+    <div id="task-result" class="card" hidden></div>
+    <div id="stop-message" class="message" role="status"></div>
+    <div id="pause-error" class="message error" role="alert"></div>
+    <div class="task-grid">
+    <div class="card" id="task-primary">
+      <h2 id="task-action-title">运行状态</h2>
+      <p id="task-instruction" class="hint"></p>
+    <details id="recording-panel" hidden>
+      <summary>浏览器录制连接</summary>
+      <p class="hint" id="recording-status"></p>
+      <div id="recording-connection" hidden>
+        <label for="recording-endpoint">本机连接地址</label><input id="recording-endpoint" readonly>
+        <label for="recording-target">本次申请标签页 ID</label><input id="recording-target" readonly>
+        <p class="hint">将以上信息交给 browser-action-recorder，先列出标签页，再只录制此标签页。连接的是 HMRC 自动化浏览器；开始前显示空白页是正常的。</p>
+        <p class="hint">该技能记录页面阶段、点击、选择和字段修改标记，不记录输入值、密码或验证码。</p>
+      </div>
+      <button id="recording-continue" type="button" hidden>开始注册流程</button>
+      <div id="recording-message" class="message" role="status"></div>
+    </details>
     <div id="otp">
       <strong>请输入刚收到的验证码</strong>
       <input id="code" autocomplete="one-time-code" placeholder="邮箱或短信验证码">
       <button id="send-code" type="button">提交验证码</button>
       <div id="code-error" class="message error"></div>
     </div>
-    <div class="row">
-      <button id="pause" class="secondary" type="button" disabled>暂停自动化</button>
-      <button id="continue" type="button" disabled>应用修改并继续</button>
-    </div>
-    <div id="pause-error" class="message error"></div>
     <div id="error-hold" style="display:none">
       <h3 style="margin-bottom:6px">出错已暂停，等你处理</h3>
       <div class="notice" id="error-hold-message"></div>
       <div class="hint" id="error-hold-countdown"></div>
-      <div class="hint">可以在本机 Chrome 里手动处理当前页面（例如点 Try again、补资料），然后点「继续当前任务」；程序会从当前页面重新判断并往下走。</div>
+      <div class="hint">请按提示处理后再继续；不确定如何处理时请联系管理员，或停止本次注册。请先核实申请状态，避免重复提交。</div>
+      <details data-admin-only hidden><summary>管理员处理说明</summary><p class="hint">可在运行服务的电脑上打开自动化 Chrome，处理当前页面后点击「继续当前任务」。程序会重新判断当前页面。</p></details>
       <div class="row">
         <button id="error-hold-resume" type="button">继续当前任务</button>
         <button id="error-hold-cancel" class="secondary" type="button">取消任务</button>
       </div>
       <div id="error-hold-status" class="message"></div>
     </div>
-    <div id="heading" class="meta"></div><div id="url" class="meta"></div>
-    <h2 style="margin-top:24px">最近操作</h2><ul id="events" class="events"></ul>
-
+    <div id="task-review-slot"></div>
+    <details data-admin-only hidden><summary>管理员诊断详情</summary><div id="heading" class="meta"></div><div id="url" class="meta"></div><div id="raw-task-message" class="meta"></div><div id="raw-hold-message" class="meta"></div></details>
+    </div>
+    <aside class="card task-summary">
+      <h2>本次申请</h2>
+      <p class="hint" id="task-flow"></p><strong id="task-business"></strong>
+      <button id="view-task-data" class="secondary" type="button">查看本页资料</button>
+      <p class="hint" id="task-data-summary"></p>
+      <p class="hint">正式提交前仍需人工核对并确认。停止会关闭本次自动化浏览器，不会撤回已发出的 HMRC 请求。</p>
+    </aside>
+    </div>
+    <details class="card" id="task-data">
+      <summary id="task-data-label">查看本页资料（只读）</summary>
+      <p class="hint" id="task-data-note"></p>
+      <div id="task-data-host"></div>
+    </details>
+    <section class="card task-log">
+      <div class="task-log-heading"><h2>最近操作</h2><button id="events-toggle" class="secondary" type="button" aria-expanded="false" hidden>展开更多</button></div>
+      <p class="hint">仅本次任务，默认显示最近 5 条。</p><ul id="events" class="events"></ul>
+    </section>
+  </section>
+  <details class="card" id="recent-applications"><summary>我保存的申请（继续办理）</summary><div id="saved-applications"></div></details>
+  <details class="card" id="customer-history" hidden><summary>本公司 · 我的办理记录</summary>
+    <p class="hint">每次办理单独存档。“申请已接收”不代表已获批；结果待核实的任务请先核查 HMRC，再决定是否重试。</p>
+    <div id="customer-runs"></div>
+  </details>
+  <details class="card" id="admin-tools" hidden><summary>账号管理</summary>
     <div id="admin-panel" style="display:none">
       <h2 style="margin-top:24px">账号管理</h2>
       <ul id="user-list" class="events"></ul>
@@ -203,8 +378,9 @@
       <button id="add-user" class="secondary" type="button">添加账号 / 重置密码</button>
       <div id="admin-message" class="message"></div>
     </div>
-  </aside>
+  </details>
 </main>
+<datalist id="country-options"><option value="China"><option value="Hong Kong"><option value="Ireland"><option value="United Kingdom"></datalist>
 <script>
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -216,20 +392,482 @@ let identityRequired = 3;
 let credentialsRemembered = false;
 let credentialsFromEnv = [];
 let credentialsStored = false;
+let isAdmin = false;
+let mailPoolAvailable = false;
+let runtimeUsesMailPool = false;
+let runtimePoolApplicationEmail = '';
+let appliedPoolApplicationEmail = '';
 let storedHasPassword = false;
+let storedHasUserId = false;
+let storedHasEmail = false;
+let storedHasPhone = false;
 let signInMethodPreset = false;
+let loginMethodChosen = false;
 let extractionConfirmed = false;
 let currentStatus = 'idle';
 let reviewChangesSignature = '';
 let reviewEditInFlight = false;
 let remoteEditSignature = '';
 let remoteEditInfo = null;
+let currentFlow = new URLSearchParams(window.location.search).get('flow') || '';
+let customerId = new URLSearchParams(window.location.search).get('customer_id') || '';
+let customerName = '';
+let customersReady = false;
+let currentRunId = '';
+let authenticatorQrId = '';
+let authenticatorQrUrl = '';
+let authenticatorQrTimer;
+let authenticatorQrAbort;
+let dismissedAuthenticatorQrId = '';
+let historySignature = '';
+let associationRevision = 0;
+let associationTimer;
+let foundCompanies = [];
+let parseInFlight = false;
+let currentFlowName = '注册';
+let flowOptionsSignature = '';
+const ACTIVE_STATUSES = ['starting','running','waiting_code','pausing','paused','reviewing','editing','holding','stopping','waiting_recorder'];
+let stopInFlight = false;
+let startInFlight = false;
+let statusRevision = 0;
+let workspaceMode = 'prepare';
+let preparationRequested = false;
+let previousTaskStatus = '';
+let lastTaskState = {status:'idle'};
+let recentEvents = [];
+let eventsExpanded = false;
+let renderedEventsSignature = '';
+
+// 移动原有节点，不复制控件，保留所有事件监听、输入值及提交确认逻辑。
+$('task-review-slot').append($('review'));
+
+const TASK_PHASES = {
+  starting:['正在准备办理', '准备好后会自动继续，请稍候。'],
+  running:['正在办理', '暂时无需操作。需要验证码或人工核对时，会在这里提示。'],
+  waiting_recorder:['等待连接录制器', '请使用下方连接地址和标签页 ID 启动录制，再点击“开始注册流程”。'],
+  waiting_code:['等待验证码', '请根据上方提示确认验证码来源，并在这里输入。'],
+  pausing:['正在安全暂停', '当前操作完成后会暂停，请稍候再修改资料。'],
+  paused:['已暂停，可以修改资料', '在下方核对或修改资料，重新点击“确认资料无误”，再使用顶部“应用修改并继续”。'],
+  reviewing:['等待最终核对', '请逐项核对下方申请内容。勾选确认并点击提交按钮后才会正式提交。'],
+  editing:['修改申请信息', '在下方修改并保存，之后会返回最终核对。'],
+  holding:['出错已暂停，等待处理', '按下方提示处理当前页面，再选择继续当前任务或取消。'],
+  stopping:['正在停止本次注册', '正在关闭浏览器并清理任务，请等待停止完成。'],
+  completed:['本次任务已结束', '请结合 HMRC 页面和操作记录核实办理结果；可返回准备资料开始下一次任务。'],
+  stopped:['本次注册已停止', '已发出的 HMRC 请求无法撤回，请先核实申请状态，再决定是否重新开始。'],
+  failed:['本次任务出错', '请查看错误提示和最近操作，核实 HMRC 申请状态后再重试。'],
+};
+
+function scrollToWorkspace(target) {
+  requestAnimationFrame(() => {
+    if (!target.isConnected || !target.getClientRects().length) return;
+    target.focus({preventScroll:true});
+    const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    if (target.id === 'task-title') {
+      // 标题位于 sticky 工具条，必须滚动到工作区本身，而不是标题当前吸顶的位置。
+      window.scrollTo({top:window.scrollY + $('run-view').getBoundingClientRect().top - 12, behavior});
+    } else {
+      target.scrollIntoView({block:'start', behavior});
+    }
+  });
+}
+
+// 仅转换操作提示，不改官方复核内容、资料值或服务端诊断记录。
+function friendlyMessage(value) {
+  let message = String(value || '');
+  const exact = {
+    '浏览器自动化正在运行':'正在办理，暂时无需操作。',
+    '正在加载配置并启动浏览器':'正在准备办理，请稍候。',
+    '正在准备本机托管的 Authenticator。':'正在设置动态验证码。',
+    'Authenticator 密钥已加密保存，等待验证绑定。':'验证器设置已保存，正在等待官方验证，尚未绑定成功。',
+    'HMRC 已确认 Authenticator 绑定成功，后续登录可自动生成动态码。':'验证器已绑定成功，后续登录可自动填写动态验证码。',
+    '正在等待下一个动态码时间窗口，可随时停止任务。':'正在等待下一组动态验证码，可随时停止任务。',
+    '自动管理 Authenticator 不能与浏览器录制同时启用，以免泄露绑定密钥。':'自动处理动态验证码与操作录制不能同时开启，请关闭其中一项。',
+    'Authenticator 私有存储不可用，请管理员检查主密钥、权限与依赖。':'暂时无法自动处理动态验证码，请联系管理员检查；已有账号可使用原验证器手动输入。',
+    '邮箱池未就绪，请先在本机完成导入、检查和启用。':'自动分配邮箱暂不可用，请联系管理员，或取消自动分配并填写可用邮箱。',
+    'Failed to fetch':'连接中断，请检查网络后刷新查看当前状态，不要重复提交。',
+    'Load failed':'连接中断，请检查网络后刷新查看当前状态，不要重复提交。',
+  };
+  if (Object.hasOwn(exact, message)) return exact[message];
+  for (const [from, to] of [
+    ['缺少环境变量 HMRC_PASSWORD。', '缺少税务登录密码，请填写后再开始办理。'],
+    ['缺少登录环境变量 HMRC_USER_ID 或 HMRC_PASSWORD。', '缺少税务登录账号或密码，请核对并补充。'],
+    ['创建登录凭据需要环境变量 HMRC_EMAIL。', '缺少注册邮箱，请填写或启用自动分配。'],
+    ['创建登录凭据需要 HMRC_FULL_NAME 或配置中的 Full name。', '缺少注册姓名，请核对申请人信息。'],
+    ['安全设置页面需要环境变量 HMRC_MFA_PHONE。', '缺少短信验证手机号，请核对并补充。'],
+  ]) message = message.replaceAll(from, to);
+  // 技术故障交给管理员排查，不把未知错误包装成成功或引导用户盲目重试。
+  if (/Traceback|playwright|TimeoutError|Error:|locator\.|net::ERR_|ENOENT|EACCES|\/Users\/|\/home\/|\.env\b|env:|doc:|服务端配置文件不存在|配置文件不存在|主密钥|私有存储不可用/i.test(message)
+      || (message && !/[\u3400-\u9fff]/.test(message))) {
+    return '当前操作未能继续，请联系管理员。请先核实申请状态，不要重复提交。'
+      + (message.includes('办理记录保存失败') ? '办理记录未保存，请勿关闭本页。' : '');
+  }
+  for (const [from, to] of [
+    ['HMRC_PASSWORD', '税务登录密码'], ['HMRC_USER_ID', '税务登录账号（GG）'],
+    ['HMRC_EMAIL', '注册邮箱'], ['HMRC_MFA_PHONE', '验证手机号'],
+    ['Create new sign in details', '注册新税务账号'], ['Government Gateway User ID', '税务登录账号（GG）'],
+    ['Gateway User ID', '税务登录账号（GG）'], ['Government Gateway', '税务账号（GG）'],
+    ['自动管理 Authenticator', '自动处理动态验证码'],
+    ['Authenticator', '验证器'], ['邮箱池', '自动分配邮箱'],
+    ['开户邮箱', '注册邮箱'], ['远程修改', '修改申请信息'],
+    ['浏览器自动化', '自动办理'], ['本机托管密钥', '已保存的验证器'],
+  ]) message = message.replaceAll(from, to);
+  return message;
+}
+
+const EVENT_LABELS = {
+  page:'正在处理申请页面', click:'正在执行页面操作',
+  'auth-credentials-filled':'已填写登录信息', 'auth-password-created':'已填写新账号密码',
+  'auth-email-filled':'已填写注册邮箱', 'auth-name-filled':'已填写注册姓名',
+  'auth-method-selected':'已选择登录方式', 'auth-tax-agent-selected':'已选择申请人身份',
+  'auth-organisation-selected':'已选择企业申请', 'auth-continue':'正在继续账号验证',
+  'gateway-user-id-captured':'已识别税务登录账号', 'gateway-user-id-not-found':'未识别到税务登录账号，需核对',
+  'mfa-phone-country-filled':'已填写验证手机号所属国家', 'mfa-phone-country-selected':'已选择验证手机号所属国家',
+  'mfa-phone-filled':'已填写验证手机号', 'mfa-method-selected':'已选择验证方式',
+  'verification-code-entered':'已填写验证码，等待验证',
+  'authenticator-selected':'已选择使用验证器', 'authenticator-introduction':'正在设置验证器',
+  'authenticator-staged':'验证器设置已保存，等待官方验证', 'authenticator-manual':'需要手动输入动态验证码',
+  'authenticator-qr-unavailable':'手机扫码图片暂不可用，自动办理继续',
+  'authenticator-waiting':'正在等待下一组动态验证码', 'authenticator-code-entered':'已填写动态验证码，等待验证',
+  'authenticator-named':'已为验证器命名，等待官方确认', 'authenticator-active':'官方已确认验证器绑定成功',
+  'browser-error-retry':'页面出现问题，正在尝试恢复', 'browser-error-recovery-exhausted':'页面恢复未成功，需要处理',
+  'error-hold':'遇到问题，已暂停等待处理', 'error-hold-finished':'本次异常处理等待已结束',
+  'run-cancelled':'已停止本次注册', 'next-task':'正在进入下一项申请内容',
+  'create-vat-application':'正在创建 VAT 申请', 'file-upload-summary-action':'正在处理证件上传页面',
+  'honesty-declaration-accepted':'已确认资料真实性声明',
+  'final-review-reached':'已到最终核对页，等待你确认', 'final-review-task':'正在打开最终核对页',
+  'final-review-edit-requested':'正在打开申请修改页面', 'final-review-edit-completed':'已完成本轮申请修改',
+  'return-to-progress-after-edit':'正在返回申请进度页', 'return-to-saved-final-review':'正在返回最终核对页',
+  'expand-final-review':'正在展开完整核对内容',
+  'final-review-confirmed':'已收到你的提交确认，尚需核实官方接收结果',
+  'application-submitted':'已执行提交操作，请查看官方接收结果',
+};
+
+function renderRecentEvents(events) {
+  recentEvents = events || [];
+  const signature = JSON.stringify([recentEvents, eventsExpanded, isAdmin]);
+  if (signature === renderedEventsSignature) return;
+  renderedEventsSignature = signature;
+  const visible = [...recentEvents].reverse().slice(0, eventsExpanded ? recentEvents.length : 5);
+  $('events').innerHTML = visible.length ? visible.map(item => {
+    const label = Object.hasOwn(EVENT_LABELS, item.event) ? EVENT_LABELS[item.event]
+      : '有新的操作记录，请结合当前状态查看；需要帮助时联系管理员。';
+    const detail = isAdmin ? `<details><summary>技术详情</summary><div class="meta">${esc([item.event, item.heading, item.text, item.reason, item.url].filter(Boolean).join('\n'))}</div></details>` : '';
+    return `<li><b>${esc(label)}</b>${detail}</li>`;
+  }).join('') : '<li class="hint">暂无本次操作记录。</li>';
+  $('events-toggle').hidden = recentEvents.length <= 5;
+  $('events-toggle').textContent = eventsExpanded ? '收起记录' : `展开全部 ${recentEvents.length} 条`;
+  $('events-toggle').setAttribute('aria-expanded', String(eventsExpanded));
+}
+
+function showWorkspace(state) {
+  lastTaskState = state;
+  const active = ACTIVE_STATUSES.includes(state.status);
+  const terminal = ['completed','stopped','failed'].includes(state.status);
+  if (active) preparationRequested = false;
+  const runningView = active || (!preparationRequested && (terminal || workspaceMode === 'run'));
+  const modeChanged = workspaceMode !== (runningView ? 'run' : 'prepare');
+  const stateChanged = previousTaskStatus !== state.status;
+  workspaceMode = runningView ? 'run' : 'prepare';
+  const destination = runningView ? $('task-data-host') : $('preparation-slot');
+  if ($('preparation-panel').parentElement !== destination) destination.append($('preparation-panel'));
+  $('preparation-slot').hidden = runningView;
+  $('run-view').hidden = !runningView;
+  $('preparation-fields').disabled = !customersReady || startInFlight || (runningView && state.status !== 'paused');
+  $('company-login-hint').hidden = !!customerId && extractionConfirmed;
+  $('preparation-title').textContent = runningView ? '本页注册资料' : '准备注册资料';
+  $('prepare-step').toggleAttribute('aria-current', !runningView);
+  $('run-step').toggleAttribute('aria-current', runningView);
+  (runningView ? $('run-step') : $('prepare-step')).setAttribute('aria-current', 'step');
+  $('task-data').dataset.editable = String(state.status === 'paused');
+  $('task-data-label').textContent = state.status === 'paused' ? '修改并重新确认资料' : '查看本页资料（只读）';
+  const hasLocalData = Object.keys(extractedValues).length > 0;
+  $('task-data-note').textContent = hasLocalData
+    ? '这里是当前客户的已保存资料/本页修改。暂停后才可修改；HMRC 已填内容以最终核对页为准。'
+    : '当前客户尚无保存资料。需要修改时请暂停并导入完整资料。';
+  $('task-data-summary').textContent = hasLocalData ? '当前客户资料默认折叠；修改后请重新确认保存。' : '没有当前客户的资料初稿，请勿导入其他客户资料。';
+  $('task-flow').textContent = currentFlowName;
+  $('task-business').textContent = state.business_name || extractedValues.business_name || '当前注册任务';
+  $('task-title').textContent = `${currentFlowName} · ${terminal ? '任务结果' : '进行中'}`;
+  const [phase, instruction] = TASK_PHASES[state.status] || ['等待任务状态', '正在读取本次任务状态，请稍候。'];
+  $('task-phase').textContent = phase;
+  $('task-action-title').textContent = phase;
+  $('task-instruction').textContent = instruction;
+  $('status').className = 'status ' + state.status;
+  if (terminal && state.run?.outcome === 'received') $('status').className = 'status';
+  if (terminal && state.run?.outcome === 'unverified') $('status').className = 'status needs-verification';
+  const statusMessage = friendlyMessage(state.message) || phase;
+  if ($('status').textContent !== statusMessage) $('status').textContent = statusMessage;
+  $('raw-task-message').textContent = isAdmin ? state.message || '' : '';
+  $('pause').hidden = !['running','pausing'].includes(state.status);
+  $('pause').textContent = state.status === 'pausing' ? '正在暂停…' : '暂停并修改资料';
+  $('continue').hidden = state.status !== 'paused';
+  $('stop').hidden = !active;
+  $('back-to-prepare').hidden = active;
+  $('switch-customer').hidden = active;
+  $('task-result').hidden = !terminal || !state.run?.id;
+  if (terminal && state.run?.id) $('task-result').innerHTML = renderRunRecord(state.run);
+  if (modeChanged) $('task-data').open = false;
+  if (state.status === 'starting' && stateChanged) eventsExpanded = false;
+  renderRecentEvents(state.events);
+  if (runningView && (modeChanged || stateChanged)) {
+    if (state.status === 'paused') {
+      $('task-data').open = true;
+      scrollToWorkspace($('task-data-label'));
+    } else if (previousTaskStatus === 'paused' && state.status === 'running') {
+      $('task-data').open = false;
+      scrollToWorkspace($('task-title'));
+    } else if (modeChanged || ['waiting_code','waiting_recorder','reviewing','editing','holding','failed','stopped','completed'].includes(state.status)) {
+      scrollToWorkspace($('task-title'));
+    }
+  }
+  previousTaskStatus = state.status;
+}
+
+$('events-toggle').addEventListener('click', () => {
+  eventsExpanded = !eventsExpanded;
+  renderRecentEvents(recentEvents);
+});
+$('view-task-data').addEventListener('click', () => {
+  $('task-data').open = true;
+  scrollToWorkspace($('task-data-label'));
+});
+$('back-to-prepare').addEventListener('click', () => {
+  if (ACTIVE_STATUSES.includes(currentStatus) || startInFlight) return;
+  if (lastTaskState.run?.submission_confirmed && !window.confirm('该任务曾确认提交。请先核实 HMRC 是否已接收，避免重复申请。确定仍要重新准备吗？')) return;
+  preparationRequested = true;
+  invalidateConfirmation('开始下一次任务前，请重新核对并确认资料及登录账号。');
+  showWorkspace(lastTaskState);
+  scrollToWorkspace($('preparation-title'));
+});
+$('switch-customer').addEventListener('click', () => {
+  location.href = customerLocation('');
+});
+
+function customerLocation(id, flow=currentFlow) {
+  const url = new URL('/', location.origin);
+  if (flow) url.searchParams.set('flow', flow);
+  if (id) url.searchParams.set('customer_id', id);
+  return url.pathname + url.search;
+}
+
+function renderRunRecord(record) {
+  const outcomes = {registered:'已取得 EORI', received:'HMRC 已接收申请，等待处理', unverified:'结果待核实'};
+  const statuses = {completed:'自动化已结束', stopped:'已停止', failed:'运行失败', interrupted:'服务中断'};
+  const links = Object.keys(record.documents || {}).filter(k => ['pdf','png','receipt_pdf','receipt_png'].includes(k)).map(kind => {
+    const url = new URL(apiUrl('/api/customer/run-document'), location.origin);
+    url.searchParams.set('run_id', record.id); url.searchParams.set('kind', kind);
+    return `<a href="${esc(url.pathname + url.search)}" download>${kind.startsWith('receipt') ? '提交后页面' : '最终复核'} ${kind.endsWith('pdf') ? 'PDF' : '截图'}</a>`;
+  }).join('');
+  const outcome = outcomes[record.outcome] || outcomes.unverified;
+  const diagnostics = isAdmin ? `<details><summary>技术详情</summary><p class="meta">记录 ${esc(record.id)} · ${esc(record.message)}</p></details>` : '';
+  return `<div class="run-record"><strong>${esc(outcome)}</strong><p>${esc(record.business_name || customerName)} · ${esc(statuses[record.status] || '办理中')}</p><p class="hint">${esc(record.started_at ? new Date(record.started_at).toLocaleString() : '')}</p>${record.reference ? `<p>回执编号：${esc(record.reference)}</p>` : ''}<p class="hint">${esc(friendlyMessage(record.message))}</p>${record.submission_confirmed ? '<p class="hint">曾确认提交；停止不会撤回已发出的请求，请先核实再重试。</p>' : ''}${links}${diagnostics}</div>`;
+}
+
+async function loadCustomerHistory() {
+  if (!customerId) return;
+  const response = await fetch(apiUrl('/api/customer/runs'));
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.detail || '读取办理记录失败');
+  $('customer-history').hidden = false;
+  $('customer-runs').innerHTML = body.runs.length ? body.runs.map(renderRunRecord).join('') : '<p class="hint">此客户在当前业务下还没有办理记录。</p>';
+}
+
+function clearAccountInputs() {
+  clearAuthenticatorQr();
+  runtimeUsesMailPool = false;
+  runtimePoolApplicationEmail = '';
+  appliedPoolApplicationEmail = '';
+  $('use-mail-pool').checked = false;
+  $('use-authenticator').checked = false;
+  $('authenticator-status').textContent = '';
+  for (const id of ['user-id','password','email','phone','gateway-user-id-input','identity-files']) $(id).value = '';
+  $('gateway-box').hidden = true;
+  $('imported-gateway-box').hidden = true;
+  $('gateway-user-id').textContent = '';
+  $('clear-credentials').hidden = true;
+  $('credential-hint').textContent = '请填写当前公司的登录信息，不会使用上一家公司或其他用户的账号。';
+  for (const id of ['identity-message','save-credentials-message']) setMessage(id, '');
+  identityCount = 0;
+  credentialsRemembered = credentialsStored = storedHasPassword = storedHasUserId = storedHasEmail = storedHasPhone = false;
+  signInMethodPreset = false;
+  loginMethodChosen = false;
+}
+
+function detachCompany() {
+  if (ACTIVE_STATUSES.includes(currentStatus)) return;
+  statusRevision += 1;
+  customerId = ''; customerName = ''; currentRunId = '';
+  currentStatus = 'idle'; preparationRequested = true;
+  historySignature = ''; flowOptionsSignature = '';
+  clearAccountInputs();
+  $('company-independent').checked = false;
+  $('customer-history').hidden = true;
+  history.replaceState(null, '', customerLocation(''));
+  showWorkspace({status:'idle', events:[]});
+}
+
+function showAssociation(result) {
+  const identity = result.identity || {};
+  const titles = {new:'已识别公司：确认资料时自动建立关联。', matched:'已匹配已有公司：确认资料后关联。', conflict:'识别编号一致，但公司名称或成立日期冲突，不会自动合并。', unresolved:'本次暂不自动关联公司，可作为独立申请继续办理。'};
+  $('company-association').hidden = false;
+  $('company-association').textContent = (titles[result.status] || '')
+    + ` ${identity.jurisdiction || '注册地待核对'} · ${identity.type || '编号类型待核对'} · ${identity.number || '未提供编号'}。 `
+    + (result.company ? `已有公司：${result.company.name}${result.company.incorporation_date ? '，成立日期 '+result.company.incorporation_date : ''}。 ` : '')
+    + (identity.message || '')
+    + ' 仅共享公司基础信息，不共享登录信息、证件或个人资料。';
+  $('company-independent-label').hidden = result.status !== 'conflict';
+  if (result.status !== 'conflict') $('company-independent').checked = false;
+}
+
+async function previewCompany() {
+  syncExtractedValues();
+  const revision = ++associationRevision;
+  const signature = JSON.stringify(extractedValues);
+  try {
+    const response = await post('/api/company/preview', {values:extractedValues});
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '公司识别失败');
+    syncExtractedValues();
+    if (revision !== associationRevision || signature !== JSON.stringify(extractedValues)) return;
+    showAssociation(body);
+  } catch (error) {
+    if (revision !== associationRevision) return;
+    $('company-association').hidden = false;
+    $('company-association').textContent = friendlyMessage(error.message) + '；确认资料时会重新核对，不会直接合并公司。';
+  }
+}
+
+$('company-independent').addEventListener('change', () => invalidateConfirmation('请重新确认本次申请的公司资料。'));
+$('company-search-button').addEventListener('click', async () => {
+  $('company-search-button').disabled = true;
+  try {
+    const response = await fetch('/api/companies?q=' + encodeURIComponent($('company-search').value.trim()));
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '检索失败');
+    foundCompanies = body.companies || [];
+    $('company-search-results').innerHTML = foundCompanies.length
+      ? foundCompanies.map((c, i) => `<div class="run-record"><strong>${esc(c.name)}</strong><p class="hint">${esc(c.jurisdiction)} · ${esc(c.type)} · ${esc(c.number)}</p><button type="button" class="secondary" data-company-index="${i}">使用公司基础信息</button></div>`).join('')
+      : '<p class="hint">未找到匹配公司（至少输入 2 个字符）。可以直接上传资料办理。</p>';
+  } catch (error) { $('company-search-results').textContent = friendlyMessage(error.message); }
+  finally { $('company-search-button').disabled = false; }
+});
+$('company-search-results').addEventListener('click', async event => {
+  const button = event.target.closest('[data-company-index]');
+  if (!button || ACTIVE_STATUSES.includes(currentStatus)) return;
+  if (Object.keys(extractedValues).length && !window.confirm('将替换当前资料并清除账号输入，未保存修改会丢失。继续吗？')) return;
+  const company = foundCompanies[Number(button.dataset.companyIndex)];
+  if (!company) return;
+  detachCompany();
+  extractedValues = {business_name:company.name, company_registration_country:company.jurisdiction === 'CN' ? 'China' : 'Hong Kong', company_identifier_type:company.type, company_registration_number:company.number, company_incorporation_date:company.incorporation_date || ''};
+  extractedLabels = {};
+  $('source-document').value = '';
+  $('signup-name').value = '';
+  invalidateConfirmation('仅填入公司基础信息，请补齐本次注册资料后核对确认。');
+  renderExtractedGroups();
+  $('confirm-extraction').disabled = false;
+  await previewCompany();
+});
+
+async function initializeCustomers() {
+  try {
+    const response = await fetch('/api/customers');
+    if (response.status === 401) { location.href = '/login'; return; }
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '加载客户失败');
+    $('saved-applications').innerHTML = body.customers.length
+      ? body.customers.map(c => `<p><a href="${esc(customerLocation(c.id))}">${esc(c.name)}</a></p>`).join('')
+      : '<p class="hint">尚无保存的申请，直接上传资料即可。</p>';
+    const selected = body.customers.find(c => c.id === customerId);
+    if (customerId && !selected) throw new Error('申请不存在或不属于当前账号，请从业务菜单重新开始。');
+    customerName = selected?.name || '';
+    if (body.active?.customer_id) {
+      $('customer-active').innerHTML = `<a href="${esc(customerLocation(body.active.customer_id, body.active.id))}">返回正在运行的客户任务</a>`;
+    }
+    await refresh();
+    if (customerId) {
+      const draftResponse = await fetch(apiUrl('/api/customer/draft'));
+      const draft = await draftResponse.json();
+      if (!draftResponse.ok) throw new Error(draft.detail || '读取客户资料失败');
+      extractedValues = draft.values || {};
+      if (Object.keys(extractedValues).length) {
+        renderExtractedGroups();
+        $('confirm-extraction').disabled = false;
+        invalidateConfirmation('已恢复当前客户的资料初稿，请重新核对并确认。');
+        await previewCompany();
+      }
+      await loadCustomerHistory();
+    }
+    customersReady = true;
+    await refresh();
+    setInterval(refresh, 1000);
+  } catch (error) {
+    setMessage('customer-message', error.message + ' 可刷新页面重试，或 ', 'error');
+    const link = document.createElement('a');
+    link.href = customerLocation(''); link.textContent = '重新上传资料';
+    $('customer-message').append(link);
+  }
+}
+
+function apiUrl(path) {
+  const url = new URL(path, window.location.origin);
+  if (currentFlow) url.searchParams.set('flow', currentFlow);
+  if (customerId) url.searchParams.set('customer_id', customerId);
+  return url.pathname + url.search;
+}
+
+$('enable-recording').addEventListener('change', () => {
+  if (!isAdmin) { $('enable-recording').checked = false; return; }
+  if ($('enable-recording').checked) $('fresh').checked = true;
+  if ($('enable-recording').checked) $('use-authenticator').checked = false;
+  showLoginFields();
+});
+
+$('recording-continue').addEventListener('click', async () => {
+  if (!isAdmin) return;
+  $('recording-continue').disabled = true;
+  setMessage('recording-message', '');
+  try {
+    const response = await post('/api/recording/continue');
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '开始注册失败');
+    setMessage('recording-message', '正在开始注册流程。', 'ok');
+  } catch (error) {
+    setMessage('recording-message', error.message, 'error');
+  }
+  await refresh();
+});
+
+function showRecording(state) {
+  const recording = isAdmin ? (state.recording || {}) : {};
+  const active = ACTIVE_STATUSES.includes(state.status);
+  $('enable-recording').disabled = !isAdmin || active;
+  if (!isAdmin) $('enable-recording').checked = false;
+  if (active) $('enable-recording').checked = !!recording.enabled;
+  if ($('enable-recording').checked || $('use-authenticator').checked) $('fresh').checked = true;
+  $('fresh').disabled = active || $('enable-recording').checked || $('use-authenticator').checked;
+  $('recording-panel').hidden = !recording.enabled;
+  const connected = !!recording.endpoint;
+  $('recording-connection').hidden = !connected;
+  $('recording-endpoint').value = recording.endpoint || '';
+  $('recording-target').value = recording.target_id || '';
+  const waiting = state.status === 'waiting_recorder';
+  if (waiting) $('recording-panel').open = true;
+  else if ($('recording-panel').dataset.waiting === 'true') $('recording-panel').open = false;
+  $('recording-panel').dataset.waiting = String(waiting);
+  $('recording-continue').hidden = !waiting;
+  $('recording-continue').disabled = !waiting || stopInFlight;
+  $('recording-status').textContent = waiting
+    ? '浏览器已准备好，尚未开始填表。连接录制器后点击下方“开始注册流程”。'
+    : connected ? '本机录制连接可用，任务结束或停止后自动关闭。'
+    : active ? '正在准备本机录制连接…' : '本次任务已结束，录制连接已关闭。';
+  if (!active || waiting) setMessage('recording-message', '');
+}
 
 async function post(url, body) {
   const isForm = body instanceof FormData;
-  const headers = {'X-CSRF-Token': csrf()};
+  const headers = {'X-CSRF-Token': csrf(), 'X-VAT-Run-ID': currentRunId};
   if (!isForm) headers['Content-Type'] = 'application/json';
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl(url), {
     method: 'POST',
     headers,
     body: body === undefined ? null : (isForm ? body : JSON.stringify(body))
@@ -238,13 +876,90 @@ async function post(url, body) {
   return response;
 }
 
+function clearAuthenticatorQr() {
+  authenticatorQrAbort?.abort();
+  authenticatorQrAbort = null;
+  clearTimeout(authenticatorQrTimer);
+  authenticatorQrId = '';
+  $('authenticator-qr-image').removeAttribute('src');
+  $('authenticator-qr-image').hidden = true;
+  if (authenticatorQrUrl) URL.revokeObjectURL(authenticatorQrUrl);
+  authenticatorQrUrl = '';
+  $('authenticator-qr-card').hidden = true;
+  $('authenticator-qr-account').textContent = '';
+}
+
+async function showAuthenticatorQr(state) {
+  const qr = state.authenticator?.qr;
+  if (document.hidden || !ACTIVE_STATUSES.includes(state.status) || !qr?.id
+      || qr.run_id !== currentRunId || qr.id === dismissedAuthenticatorQrId) {
+    clearAuthenticatorQr();
+    return;
+  }
+  if (authenticatorQrId === qr.id) return;
+  clearAuthenticatorQr();
+  authenticatorQrId = qr.id;
+  const revision = statusRevision;
+  const controller = new AbortController();
+  authenticatorQrAbort = controller;
+  $('authenticator-qr-card').hidden = false;
+  $('authenticator-qr-account').textContent = `${state.business_name || state.customer_name || '本次公司'} · GG 尾号 ${qr.gateway_tail}`;
+  $('authenticator-qr-message').textContent = '正在安全加载二维码…';
+  // 到时立即清图，不依赖下一次状态轮询，也不刷新服务端展示期限。
+  authenticatorQrTimer = setTimeout(() => {
+    dismissedAuthenticatorQrId = qr.id;
+    clearAuthenticatorQr();
+  }, Math.max(0, Math.min(300, Number(qr.expires_in) || 0)) * 1000);
+  try {
+    const response = await fetch(apiUrl('/api/authenticator/qr'), {
+      method:'POST', cache:'no-store', signal:controller.signal,
+      headers:{'X-CSRF-Token':csrf(), 'X-VAT-Run-ID':qr.run_id}
+    });
+    if (response.status === 401) { clearAuthenticatorQr(); window.location.href = '/login'; return; }
+    if (!response.ok) throw new Error('暂时无法展示二维码，自动办理不受影响。请联系管理员检查安全连接。');
+    const blob = await response.blob();
+    if (controller.signal.aborted || revision !== statusRevision || authenticatorQrId !== qr.id || currentRunId !== qr.run_id) return;
+    authenticatorQrUrl = URL.createObjectURL(blob);
+    $('authenticator-qr-image').src = authenticatorQrUrl;
+    $('authenticator-qr-image').hidden = false;
+    $('authenticator-qr-message').textContent = '请直接扫码添加。能否登录以本次 HMRC 绑定成功为准。';
+  } catch (error) {
+    if (controller.signal.aborted || authenticatorQrId !== qr.id) return;
+    $('authenticator-qr-message').textContent = error.message;
+  }
+}
+
+$('authenticator-qr-close').addEventListener('click', async () => {
+  dismissedAuthenticatorQrId = authenticatorQrId;
+  clearAuthenticatorQr();
+  try { await post('/api/authenticator/qr/close'); } catch (_) { /* 服务端仍会按期限清除。 */ }
+});
+window.addEventListener('pagehide', clearAuthenticatorQr);
+document.addEventListener('visibilitychange', () => { if (document.hidden) clearAuthenticatorQr(); });
+
 function setMessage(id, text, kind='') {
-  const element = $(id); element.textContent = text; element.className = 'message ' + kind;
+  const element = $(id);
+  const display = kind === 'error' ? friendlyMessage(text) : text;
+  element.textContent = display;
+  element.className = 'message ' + kind;
+  if (isAdmin && text && display !== text) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = '技术详情';
+    const raw = document.createElement('div');
+    raw.className = 'meta';
+    raw.textContent = text;
+    details.append(summary, raw);
+    element.append(details);
+  }
 }
 
 function syncExtractedValues() {
   document.querySelectorAll('[data-extracted-key]').forEach(input => {
-    const value = input.value.trim();
+    if (input.dataset.extractedKey === 'email' && usesPoolPersonalEmail()) return;
+    const value = input.dataset.extractedKey === 'vat_number'
+      ? normalizeVatNumber(input.value) : input.value.trim();
+    if (input.dataset.extractedKey === 'vat_number') input.value = value;
     if (value) extractedValues[input.dataset.extractedKey] = value;
     else delete extractedValues[input.dataset.extractedKey];
   });
@@ -255,36 +970,172 @@ function invalidateConfirmation(message='') {
   if (message) setMessage('confirm-message', message, 'error');
 }
 
+function usesPoolPersonalEmail() {
+  if (currentFlow !== 'vat') return false;
+  if (ACTIVE_STATUSES.includes(currentStatus)) return runtimeUsesMailPool;
+  return $('method').value === 'Create new sign in details' && mailPoolAvailable && $('use-mail-pool').checked;
+}
+
+function syncPoolPersonalEmailField() {
+  const input = document.querySelector('[data-extracted-key="email"]');
+  if (!input || currentFlow !== 'vat') return;
+  const automatic = usesPoolPersonalEmail();
+  const wasAutomatic = input.dataset.poolPersonal === 'true';
+  if (automatic) {
+    if (!wasAutomatic) {
+      if (input.value.trim()) extractedValues.email = input.value.trim();
+      else delete extractedValues.email;
+    }
+    input.value = ACTIVE_STATUSES.includes(currentStatus) ? runtimePoolApplicationEmail : '';
+  } else if (wasAutomatic) {
+    input.value = extractedValues.email || '';
+  }
+  input.dataset.poolPersonal = String(automatic);
+  input.readOnly = automatic;
+  input.placeholder = automatic ? '开始办理后自动分配，与税务账号注册邮箱相同' : '';
+  const hint = $('personal-email-pool-hint');
+  if (hint) {
+    hint.hidden = !automatic;
+    hint.textContent = '个人邮箱将改用系统分配的注册邮箱，并提交给税务局；公司电子邮箱不变。支持自动获取验证码时会自动填写，否则会提示你输入。';
+  }
+  updateGroupBadges();
+}
+
+function missingExtractedField(key) {
+  return !(key === 'email' && usesPoolPersonalEmail()) && !currentFieldValue(key);
+}
+
+function showLoginFields() {
+  const creating = $('method').value === 'Create new sign in details';
+  const automaticMfa = $('use-authenticator').checked;
+  const active = ACTIVE_STATUSES.includes(currentStatus);
+  $('new-account-fields').hidden = !creating;
+  $('existing-account-fields').hidden = creating;
+  for (const id of ['email', 'phone', 'signup-name']) $(id).disabled = !creating;
+  $('phone').disabled = !creating || automaticMfa;
+  $('signup-phone-field').hidden = automaticMfa;
+  $('use-authenticator').disabled = active;
+  if (automaticMfa || !isAdmin) $('fresh').checked = true;
+  $('fresh').disabled = active || automaticMfa || $('enable-recording').checked;
+  $('email').disabled = !creating || (mailPoolAvailable && $('use-mail-pool').checked);
+  $('email').placeholder = mailPoolAvailable && $('use-mail-pool').checked ? '开始办理后自动分配，无需填写' : '';
+  $('use-mail-pool').disabled = !creating || !mailPoolAvailable || ACTIVE_STATUSES.includes(currentStatus);
+  $('user-id').disabled = creating;
+  $('password').autocomplete = creating ? 'new-password' : 'current-password';
+  $('method-hint').textContent = creating
+    ? (automaticMfa ? '请确认注册邮箱、姓名和密码。系统自动设置验证器，无需短信验证手机号；申请联系手机号仍需填写。' : '请填写注册邮箱、姓名、密码和短信验证手机号。')
+    : '使用已有账号和密码登录，无需填写注册邮箱或手机号；验证码使用该账号原有的接收方式。';
+  document.querySelectorAll('[data-use-signup-email]').forEach(button => { button.hidden = !creating; });
+  syncPoolPersonalEmailField();
+}
+
+$('method').addEventListener('change', () => {
+  signInMethodPreset = true;
+  loginMethodChosen = true;
+  showLoginFields();
+});
+$('use-mail-pool').addEventListener('change', showLoginFields);
+$('use-authenticator').addEventListener('change', () => {
+  if ($('use-authenticator').checked) $('enable-recording').checked = false;
+  showLoginFields();
+});
+
+showLoginFields();
+
+function fieldLabel(key) {
+  const companyLabels = {business_name:'公司正式名称', company_registration_country:'公司注册国家 / 地区（不是通讯地址）', company_identifier_type:'公司编号类型', company_registration_number:'公司注册号 / 统一社会信用代码 / 香港 BRN', company_incorporation_date:'公司成立日期'};
+  if (companyLabels[key]) return companyLabels[key];
+  if (key === 'vat_number') return '英国 VAT 号（9 位数字，不含 GB）';
+  if (currentFlow === 'eori' && key === 'vat_contact_email') return 'EORI 通知邮箱';
+  if (key === 'vat_contact_email') return '公司电子邮箱';
+  if (key === 'business_phone') return '公司联系电话';
+  if (currentFlow === 'eori' && key === 'project_code') return '项目编号（选填，仅用于本地管理）';
+  return extractedLabels[key] || key;
+}
+
+function validateNotificationEmail() {
+  if (currentFlow !== 'eori') return true;
+  const input = document.querySelector('[data-extracted-key="vat_contact_email"]');
+  if (!input || !input.value.trim() || !input.checkValidity()) {
+    invalidateConfirmation('请填写有效的 EORI 通知邮箱，用于接收海关通知及邮箱验证码。');
+    if (input) { revealField(input); input.focus(); }
+    return false;
+  }
+  return true;
+}
+
+function normalizeVatNumber(value) {
+  return String(value || '').replace(/\s+/g, '').replace(/^GB/i, '');
+}
+
+function validateVatNumber() {
+  if (currentFlow !== 'eori') return true;
+  if (/^[0-9]{9}$/.test(extractedValues.vat_number || '')) return true;
+  invalidateConfirmation('英国 VAT 号去除 GB 前缀和空格后应为 9 位数字，请核对。');
+  const input = document.querySelector('[data-extracted-key="vat_number"]');
+  if (input) { revealField(input); input.focus(); }
+  return false;
+}
+
 // 与 HMRC Check your answers 的 section 对齐：准备页按同一套分组预演。
 const FIELD_GROUPS = [
   {title:'项目信息', fields:['project_code','application_reference'], required:['project_code','application_reference']},
-  {title:'关于你（About you）', fields:['full_name','first_name','last_name','birth_date'], required:['full_name','birth_date']},
-  {title:'居住地址（Home address）', lineKeys:['home_premises','home_street','home_locality','home_city','home_region','home_postcode','home_country'], sourceKeys:['residential_address'], sourceTitle:'原始居住地址（拆分来源）', required:['home_premises','home_street','home_country']},
-  {title:'核实企业（Verify your business）', fields:['business_name','company_registration_number','company_registration_country','company_incorporation_date'], required:['business_name']},
-  {title:'业务与经营地址（About the business）', fields:['business_description'], optionalFields:['trading_name'], optionalTitle:'选填：交易名称（不填则 HMRC 沿用公司正式名称）', lineKeys:['premises','street','locality','city','region','postcode','country'], sourceKeys:['business_address','business_postcode'], sourceTitle:'原始注册地址（拆分来源）', required:['premises','street','postcode','country','business_description']},
-  {title:'联系方式（会进入申请）', fields:['email','phone','vat_contact_email','business_phone'], required:['email','phone']},
+  {title:'申请人信息', fields:['full_name','first_name','last_name','birth_date'], required:['full_name','birth_date']},
+  {title:'居住地址', lineKeys:['home_premises','home_street','home_locality','home_city','home_region','home_postcode','home_country'], sourceKeys:['residential_address'], sourceTitle:'原始居住地址', required:['home_premises','home_street','home_country']},
+  {title:'公司信息', fields:['business_name','company_registration_country','company_identifier_type','company_registration_number','company_incorporation_date'], required:['business_name']},
+  {title:'业务与经营地址', fields:['business_description'], optionalFields:['trading_name'], optionalTitle:'选填：交易名称（不填则沿用公司正式名称）', lineKeys:['premises','street','locality','city','region','postcode','country'], sourceKeys:['business_address','business_postcode'], sourceTitle:'原始注册地址', required:['premises','street','postcode','country','business_description']},
+  {title:'个人联系方式（会进入申请）', fields:['email','phone'], required:['email','phone']},
+  {title:'公司联系方式（会进入申请）', fields:['vat_contact_email','business_phone'], required:[], hint:'公司电子邮箱来自资料中的“VAT沟通邮箱”，不会被自动分配的注册邮箱替换。'},
 ];
-const REQUIRED_KEYS = FIELD_GROUPS.flatMap(group => group.required || []);
+const EORI_FIELD_GROUPS = [
+  {title:'内部管理（选填）', optionalFields:['project_code'], optionalTitle:'项目编号（留空不影响 EORI 注册）', required:[]},
+  {title:'企业信息', fields:['business_name','company_registration_country','company_identifier_type','company_registration_number','company_incorporation_date'], required:['business_name','company_incorporation_date']},
+  {title:'公司注册地址', lineKeys:['premises','street','locality','city','region','postcode','country'], sourceKeys:['business_address','business_postcode'], sourceTitle:'原始注册地址', required:['premises','street','city','postcode','country']},
+  {title:'已有英国 VAT 登记信息', fields:['vat_number','vat_registration_date'], required:['vat_number','vat_registration_date']},
+  {title:'EORI 联系方式', fields:['full_name','phone','vat_contact_email'], required:['full_name','phone','vat_contact_email']},
+];
+
+function fieldGroups() {
+  return currentFlow === 'eori' ? EORI_FIELD_GROUPS : FIELD_GROUPS;
+}
 const VAT_RULES_ROWS = [
-  ['Standard rate (20%) VAT taxable turnover for next 12 months','£10,000'],
-  ['Reduced rate (5%) VAT taxable turnover for next 12 months','£0'],
-  ['Zero rate (0%) VAT taxable turnover for next 12 months','£0'],
-  ['Standard Industry Classification codes','47910 - Retail sale via mail order houses or via Internet'],
-  ['VAT Returns','按注册月份自动选择季度申报组'],
+  ['未来 12 个月标准税率（20%）营业额','£10,000'],
+  ['未来 12 个月低税率（5%）营业额','£0'],
+  ['未来 12 个月零税率营业额','£0'],
+  ['行业分类代码（SIC）','47910 — 邮购或互联网零售'],
+  ['VAT 申报周期','按注册月份自动选择季度申报组'],
 ];
 let renderedGroups = [];
 
 function fieldInputHtml(key, wide=false) {
-  const label = extractedLabels[key] || key;
+  const label = fieldLabel(key);
   const value = esc(extractedValues[key] || '');
+  if (['country','home_country','company_registration_country'].includes(key)) {
+    return `<div><label>${esc(label)}</label><input list="country-options" data-extracted-key="${key}" value="${value}" placeholder="选择或填写英文国家名"></div>`;
+  }
+  if (key === 'company_identifier_type') {
+    const options = [['','未确认 / 其他编号'],['USCC','内地统一社会信用代码（18 位）'],['BRN','香港商业登记号码 BRN（8 位）'],['CRN','香港旧公司注册编号（不用于自动关联）']];
+    return `<div><label>${esc(label)}</label><select data-extracted-key="${key}">${options.map(([id, name]) => `<option value="${id}"${value === id ? ' selected' : ''}>${name}</option>`).join('')}</select></div>`;
+  }
+  if (currentFlow === 'eori' && key === 'vat_contact_email') {
+    return `<div class="wide">
+      <label for="eori-notification-email">EORI 通知邮箱（必填）</label>
+      <input id="eori-notification-email" type="email" required data-extracted-key="vat_contact_email" value="${value}" aria-describedby="eori-email-hint">
+      <div id="eori-email-hint" class="hint">用于接收海关通知及邮箱验证码，可与注册邮箱不同。如资料中有“VAT沟通邮箱”会自动填入，请确认能接收邮件；留空不会自动使用注册邮箱。</div>
+      <button type="button" class="secondary" data-use-signup-email>使用注册邮箱</button>
+    </div>`;
+  }
   const control = key === 'business_description'
     ? `<textarea data-extracted-key="${key}">${value}</textarea>`
     : `<input data-extracted-key="${key}" value="${value}">`;
-  return `<div class="${wide ? 'wide' : ''}"><label>${esc(label)}</label>${control}</div>`;
+  const hint = currentFlow === 'vat' && key === 'email'
+    ? '<div id="personal-email-pool-hint" class="hint" hidden></div>' : '';
+  return `<div class="${wide ? 'wide' : ''}"><label>${esc(label)}</label>${control}${hint}</div>`;
 }
 
 function renderGroupSection(group, index) {
   const parts = [];
+  if (group.hint) parts.push(`<p class="hint">${esc(group.hint)}</p>`);
   const optional = group.optionalFields || [];
   const shownOptional = optional.filter(key => (extractedValues[key] || '').trim());
   const hiddenOptional = optional.filter(key => !shownOptional.includes(key));
@@ -308,6 +1159,7 @@ function renderGroupSection(group, index) {
         <button type="button" class="secondary" data-addr-toggle="${gid}">改地址</button>
       </div>
       <div data-addr-edit="${gid}" hidden>
+        <p class="hint">地址请使用英文，提交时每行最多 35 个字符。系统会重新分行，不会截断；无法完整填入时会暂停提示。</p>
         <div class="group-grid">${group.lineKeys.map(key => fieldInputHtml(key)).join('')}</div>
       </div>`);
   }
@@ -319,7 +1171,7 @@ function renderGroupSection(group, index) {
       </details>`);
   }
   return `
-    <details class="group-section" open data-group-index="${index}">
+    <details class="group-section"${group.collapsed ? '' : ' open'} data-group-index="${index}">
       <summary>${esc(group.title)}<span class="group-badge" data-group-badge></span></summary>
       <div class="group-body">${parts.join('')}</div>
     </details>`;
@@ -327,21 +1179,24 @@ function renderGroupSection(group, index) {
 
 function renderVatRulesSection() {
   return `
-    <details class="group-section" open>
-      <summary>VAT 细则（固定规则，随申请提交）<span class="group-badge ok">固定</span></summary>
+    <details class="group-section">
+      <summary>申报设置<span class="group-badge">请核对</span></summary>
       <div class="group-body">
         ${VAT_RULES_ROWS.map(([key, value]) => `<div class="fixed-row"><div class="review-key">${esc(key)}</div><div class="review-value">${esc(value)}</div></div>`).join('')}
-        <div class="hint">固定自动化规则：不从文档解析，也不能在页面中修改。</div>
+        <div class="hint">这些预设内容会随申请提交，不从上传资料中识别。如不符合实际情况，请勿提交，联系管理员调整。</div>
       </div>
     </details>`;
 }
 
 function renderExtractedGroups() {
-  const known = new Set(FIELD_GROUPS.flatMap(group => [...(group.fields||[]), ...(group.optionalFields||[]), ...(group.lineKeys||[]), ...(group.sourceKeys||[])]));
+  const groups = fieldGroups();
+  const knownGroups = currentFlow === 'eori' ? [...FIELD_GROUPS, ...EORI_FIELD_GROUPS] : groups;
+  const known = new Set(knownGroups.flatMap(group => [...(group.fields||[]), ...(group.optionalFields||[]), ...(group.lineKeys||[]), ...(group.sourceKeys||[])]));
   const extras = Object.keys(extractedLabels).filter(key => !known.has(key));
-  renderedGroups = extras.length ? [...FIELD_GROUPS, {title:'其他字段', fields:extras, required:[]}] : [...FIELD_GROUPS];
+  renderedGroups = extras.length ? [...groups, {title:'其他字段', fields:extras, required:[], collapsed:currentFlow !== 'eori'}] : [...groups];
   const wrap = $('extracted-groups');
-  wrap.innerHTML = renderedGroups.map(renderGroupSection).join('') + renderVatRulesSection();
+  wrap.innerHTML = renderedGroups.map(renderGroupSection).join('')
+    + (currentFlow === 'eori' ? '' : renderVatRulesSection());
   wrap.querySelectorAll('[data-extracted-key]').forEach(input => {
     input.addEventListener('input', () => invalidateConfirmation('资料已修改，请重新确认。'));
   });
@@ -355,6 +1210,7 @@ function renderExtractedGroups() {
   });
   refreshAddrPreviews();
   updateGroupBadges();
+  showLoginFields();
 }
 
 function currentFieldValue(key) {
@@ -377,7 +1233,7 @@ function updateGroupBadges() {
     if (!group) return;
     const badge = section.querySelector('[data-group-badge]');
     const required = group.required || [];
-    const missing = required.filter(key => !currentFieldValue(key));
+    const missing = required.filter(missingExtractedField);
     if (!required.length) {
       badge.textContent = ''; badge.className = 'group-badge';
     } else if (!missing.length) {
@@ -387,7 +1243,7 @@ function updateGroupBadges() {
     }
     required.forEach(key => {
       const input = document.querySelector(`[data-extracted-key="${key}"]`);
-      if (input) input.classList.toggle('field-missing', !currentFieldValue(key));
+      if (input) input.classList.toggle('field-missing', missingExtractedField(key));
     });
   });
 }
@@ -407,52 +1263,143 @@ function revealField(input) {
 }
 
 $('logout').addEventListener('click', async () => {
+  clearAuthenticatorQr();
   await post('/api/logout');
   window.location.href = '/login';
 });
 
-$('parse-document').addEventListener('click', async () => {
+async function parseSelectedDocument() {
+  if (parseInFlight || $('preparation-fields').disabled) return;
   const file = $('source-document').files[0];
   if (!file) { setMessage('parse-message', '请先选择资料文档。', 'error'); return; }
-  setMessage('parse-message', '正在服务器本机解析…');
+  invalidateConfirmation('正在识别，请完成后重新确认资料。');
+  setMessage('parse-message', '正在上传并识别资料…');
+  $('imported-gateway-box').hidden = true;
   const data = new FormData(); data.append('file', file);
+  parseInFlight = true;
+  let parsed = false;
+  $('source-document').disabled = true;
+  $('confirm-extraction').disabled = true;
+  $('parse-document').disabled = true;
+  $('parse-document').textContent = '正在识别…';
   try {
     const response = await post('/api/parse-document', data);
     const body = await response.json();
-    if (!response.ok) throw new Error(body.detail || '解析失败');
+    if (!response.ok) throw new Error(body.detail || '识别失败');
+    if (!ACTIVE_STATUSES.includes(currentStatus)) detachCompany();
     extractedValues = body.values || {}; extractedLabels = body.labels || {};
+    if (extractedValues.vat_number) extractedValues.vat_number = normalizeVatNumber(extractedValues.vat_number);
+    const gatewayId = body.credentials?.HMRC_USER_ID || '';
+    if (/^[0-9]{12}$/.test(gatewayId)) {
+      $('imported-gateway-box').hidden = false;
+      if (ACTIVE_STATUSES.includes(currentStatus)) {
+        $('imported-gateway-hint').textContent = '已识别表格中的税务账号（GG）；当前正在办理，未更改登录账号。任务结束后重新识别即可自动填入。';
+      } else {
+        $('user-id').value = gatewayId;
+        $('method').value = 'Government Gateway';
+        signInMethodPreset = true;
+        showLoginFields();
+        $('imported-gateway-hint').textContent = '已自动填入表格中的税务账号（GG），请核对上方账号及对应密码。';
+      }
+    }
+    $('signup-name').value = extractedValues.full_name || '';
     invalidateConfirmation();
     renderExtractedGroups();
-    $('confirm-extraction').disabled = false;
-    $('parse-warnings').innerHTML = (body.warnings || []).map(item => `<li>${esc(item)}</li>`).join('');
-    setMessage('parse-message', `解析完成，识别到 ${Object.keys(extractedValues).length} 个字段。请检查并修正下方内容。`, 'ok');
+    parsed = true;
+    const warnings = (body.warnings || []).filter(item => currentFlow !== 'eori'
+      || (!item.startsWith('居住地址') && !item.startsWith('未识别到个人电子邮箱')));
+    $('parse-warnings').innerHTML = warnings.map(item => `<li>${esc(item)}</li>`).join('');
+    setMessage('parse-message', '资料识别完成，请逐项检查并补充下方内容。', 'ok');
+    await previewCompany();
   } catch (error) { setMessage('parse-message', error.message, 'error'); }
-});
+  finally {
+    parseInFlight = false;
+    $('source-document').disabled = false;
+    $('confirm-extraction').disabled = !parsed;
+    $('parse-document').disabled = !$('source-document').files.length;
+    $('parse-document').textContent = '重新识别';
+  }
+}
 
-$('confirm-extraction').addEventListener('click', () => {
+$('source-document').addEventListener('change', () => {
+  $('parse-document').disabled = !$('source-document').files.length;
+  if ($('source-document').files.length) void parseSelectedDocument();
+});
+$('parse-document').addEventListener('click', parseSelectedDocument);
+
+$('confirm-extraction').addEventListener('click', async () => {
+  if (parseInFlight) return;
   syncExtractedValues();
-  const missing = REQUIRED_KEYS.filter(key => !extractedValues[key]);
+  if (!validateNotificationEmail() || !validateVatNumber()) return;
+  const missing = fieldGroups().flatMap(group => group.required || []).filter(missingExtractedField);
   if (missing.length) {
-    const names = missing.map(key => extractedLabels[key] || key);
+    const names = missing.map(fieldLabel);
     invalidateConfirmation('以下必要资料仍为空：' + names.join('、'));
     const first = document.querySelector(`[data-extracted-key="${missing[0]}"]`);
     if (first) { revealField(first); first.focus(); }
     return;
   }
-  extractionConfirmed = true;
-  setMessage('confirm-message', '已确认当前提取资料无误。如再次修改任何字段，需要重新确认。', 'ok');
+  const confirmedValues = JSON.stringify(extractedValues);
+  $('confirm-extraction').disabled = true;
+  try {
+    const response = await post('/api/company/confirm', {values:extractedValues, independent:$('company-independent').checked});
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '保存客户资料失败');
+    syncExtractedValues();
+    if (JSON.stringify(extractedValues) !== confirmedValues) {
+      invalidateConfirmation('保存期间资料已更改，请重新确认。'); return;
+    }
+    const previousId = customerId;
+    customerId = body.customer_id;
+    customerName = body.customer_name;
+    if (previousId && previousId !== customerId) clearAccountInputs();
+    if (!loginMethodChosen && !$('user-id').value.trim()) signInMethodPreset = false;
+    extractedValues = body.values;
+    statusRevision += 1;
+    flowOptionsSignature = ''; historySignature = '';
+    if (!ACTIVE_STATUSES.includes(currentStatus)) preparationRequested = true;
+    history.replaceState(null, '', customerLocation(customerId));
+    renderExtractedGroups();
+    showAssociation(body.preview);
+    extractionConfirmed = true;
+    setMessage('confirm-message', `已确认「${customerName}」，${body.association === 'independent' ? '本次申请已单独保存，未关联已有公司' : '申请资料已保存'}。修改后请重新确认。`, 'ok');
+    await refresh();
+  } catch (error) { invalidateConfirmation(error.message); }
+  finally { $('confirm-extraction').disabled = false; }
 });
 
 $('extracted-groups').addEventListener('input', event => {
   if (!event.target.dataset.extractedKey) return;
+  if (['business_name','company_registration_country','company_identifier_type','company_registration_number','company_incorporation_date'].includes(event.target.dataset.extractedKey)) {
+    if (customerId && !ACTIVE_STATUSES.includes(currentStatus)) detachCompany();
+    associationRevision += 1;
+    $('company-independent').checked = false;
+    clearTimeout(associationTimer);
+    associationTimer = setTimeout(previewCompany, 350);
+  }
   refreshAddrPreviews();
   updateGroupBadges();
 });
 
+$('extracted-groups').addEventListener('click', event => {
+  if (!event.target.closest('[data-use-signup-email]')) return;
+  const email = $('email');
+  if (!email.value.trim() || !email.checkValidity()) {
+    setMessage('confirm-message', '请先在“注册新税务账号”下填写有效的注册邮箱，再点击复制。', 'error');
+    email.focus();
+    return;
+  }
+  const notification = $('eori-notification-email');
+  notification.value = email.value.trim();
+  notification.dispatchEvent(new Event('input', {bubbles:true}));
+  syncExtractedValues();
+});
+
 $('save-identity').addEventListener('click', async () => {
+  if (!customerId || !extractionConfirmed) { setMessage('identity-message', '请先核对并确认上方公司资料。', 'error'); return; }
   const files = [...$('identity-files').files];
-  if (files.length !== 3) { setMessage('identity-message', '请一次选择正好 3 份文件。', 'error'); return; }
-  setMessage('identity-message', '正在保存到服务器私有临时区…');
+  if (files.length !== identityRequired) { setMessage('identity-message', `请一次选择正好 ${identityRequired} 份文件。`, 'error'); return; }
+  setMessage('identity-message', '正在上传身份证明…');
   const data = new FormData(); files.forEach(file => data.append('files', file));
   try {
     const response = await post('/api/identity-documents', data);
@@ -465,38 +1412,76 @@ $('save-identity').addEventListener('click', async () => {
 
 $('start-form').addEventListener('submit', async event => {
   event.preventDefault(); setMessage('form-error', ''); syncExtractedValues();
+  if (startInFlight || stopInFlight || ACTIVE_STATUSES.includes(currentStatus)) return;
+  if (!customerId || !customersReady) { setMessage('form-error', '请先核对并确认上方资料。', 'error'); return; }
+  if (!validateNotificationEmail() || !validateVatNumber()) return;
   if (!extractionConfirmed) { setMessage('form-error', '请先检查提取结果并点击“确认资料无误”。', 'error'); return; }
-  if (!extractedValues.full_name) { setMessage('form-error', '资料中缺少负责人姓名，请先解析文档或在提取结果中补充。', 'error'); return; }
+  if (!extractedValues.full_name) { setMessage('form-error', '资料中缺少负责人姓名，请上传资料或在识别结果中补充。', 'error'); return; }
   if (identityCount < identityRequired) { setMessage('form-error', `请先保存 ${identityRequired} 份身份证明文件。`, 'error'); return; }
   const method = $('method').value;
-  const hasDefaultCredentials = credentialsStored || credentialsRemembered || credentialsFromEnv.length > 0;
+  const useAuthenticator = $('use-authenticator').checked;
+  const useMailPool = method === 'Create new sign in details' && mailPoolAvailable && $('use-mail-pool').checked;
+  if (useMailPool && !/^[^\s@]+@[^\s@]+$/.test(extractedValues.vat_contact_email || '')) {
+    setMessage('form-error', '请先填写公司电子邮箱 / EORI 通知邮箱；系统分配的注册邮箱不会替代它。', 'error'); return;
+  }
   const passwordReady = !!$('password').value
     || storedHasPassword || credentialsRemembered
     || credentialsFromEnv.includes('HMRC_PASSWORD');
   if (method === 'Government Gateway') {
-    const userReady = !!$('user-id').value || credentialsStored || credentialsRemembered;
+    const userReady = !!$('user-id').value.trim() || storedHasUserId || credentialsRemembered || credentialsFromEnv.includes('HMRC_USER_ID');
     if (!userReady) {
-      setMessage('form-error', 'Government Gateway 登录要填 Gateway User ID 和密码；客户还没有账号请把登录方式改成“Create new sign in details”。', 'error'); return;
+      setMessage('form-error', '请填写税务登录账号（GG）；还没有账号请改选“注册新税务账号”。', 'error'); return;
     }
-  } else if (!hasDefaultCredentials && !$('email').value) {
-    setMessage('form-error', '新建 Government Gateway 账号要填登录邮箱和密码（手机号用于收短信验证码）。', 'error'); return;
+  } else {
+    const emailReady = useMailPool || !!$('email').value.trim() || storedHasEmail || credentialsRemembered || credentialsFromEnv.includes('HMRC_EMAIL');
+    const phoneReady = useAuthenticator || !!$('phone').value.trim() || storedHasPhone || credentialsRemembered || credentialsFromEnv.includes('HMRC_MFA_PHONE');
+    if (!emailReady || !phoneReady) {
+      setMessage('form-error', useAuthenticator ? '请填写注册邮箱，或勾选“自动分配注册邮箱”。' : '请填写注册邮箱和短信验证手机号。', 'error'); return;
+    }
   }
   if (!passwordReady) {
-    setMessage('form-error', '请填写 HMRC 登录密码；如果所有客户共用同一个密码，把它写进 .env 的 HMRC_PASSWORD 就不用每次填。', 'error'); return;
+    setMessage('form-error', '请填写税务登录密码。', 'error'); return;
   }
   const credentials = {
-    HMRC_SIGN_IN_METHOD:$('method').value, HMRC_EMAIL:$('email').value,
-    HMRC_USER_ID:$('user-id').value, HMRC_PASSWORD:$('password').value,
-    HMRC_FULL_NAME:extractedValues.full_name, HMRC_MFA_METHOD:'Text message',
-    HMRC_MFA_PHONE:$('phone').value, HMRC_MFA_PHONE_IS_UK:'No',
-    HMRC_MFA_PHONE_COUNTRY:'China', HMRC_IS_TAX_AGENT:'No', HMRC_ACCESS_AS_BUSINESS:'Yes'
+    HMRC_SIGN_IN_METHOD:method, HMRC_PASSWORD:$('password').value,
+    HMRC_IS_TAX_AGENT:'No', HMRC_ACCESS_AS_BUSINESS:'Yes'
   };
+  if (method === 'Government Gateway') {
+    credentials.HMRC_USER_ID = $('user-id').value.trim();
+  } else {
+    Object.assign(credentials, {
+      HMRC_EMAIL:useMailPool ? '' : $('email').value.trim(), HMRC_FULL_NAME:$('signup-name').value.trim() || extractedValues.full_name,
+      HMRC_MFA_METHOD:useAuthenticator ? 'Authenticator app for smartphone or tablet' : 'Text message', HMRC_MFA_PHONE:useAuthenticator ? '' : $('phone').value.trim(),
+      HMRC_MFA_PHONE_IS_UK:'No', HMRC_MFA_PHONE_COUNTRY:'China'
+    });
+  }
+  startInFlight = true;
+  $('start').disabled = true;
   try {
-    const response = await post('/api/start', {fresh_session:$('fresh').checked, resume:false, credentials, extracted_values:extractedValues, extracted_confirmed:extractionConfirmed});
+    const response = await post('/api/start', {fresh_session:!isAdmin || $('fresh').checked, resume:false, enable_recording:isAdmin && $('enable-recording').checked, use_mail_pool:useMailPool, use_authenticator:useAuthenticator, credentials, extracted_values:extractedValues, extracted_confirmed:extractionConfirmed});
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || '启动失败');
     $('password').value = '';
+    statusRevision += 1; // 丢弃启动前已发出、尚未返回的旧状态请求。
+    currentStatus = 'starting';
+    runtimeUsesMailPool = useMailPool;
+    runtimePoolApplicationEmail = '';
+    currentRunId = body.run?.id || '';
+    preparationRequested = false;
+    const starting = {status:'starting', message:'正在加载配置并启动浏览器', business_name:extractedValues.business_name || '', events:[], run:body.run || {}, recording:{enabled:$('enable-recording').checked}};
+    $('otp').style.display = 'none';
+    $('error-hold').style.display = 'none';
+    $('stop').disabled = false;
+    setMessage('stop-message', '');
+    setMessage('pause-error', '');
+    showReview(null);
+    showRecording(starting);
+    showWorkspace(starting);
   } catch (error) { setMessage('form-error', error.message, 'error'); }
+  finally {
+    startInFlight = false;
+    await refresh();
+  }
 });
 
 $('clear-credentials').addEventListener('click', async () => {
@@ -506,32 +1491,40 @@ $('clear-credentials').addEventListener('click', async () => {
   if (!response.ok) { setMessage('form-error', body.detail || '清除失败', 'error'); return; }
   credentialsRemembered = false;
   credentialsStored = false;
+  storedHasUserId = storedHasPassword = storedHasEmail = storedHasPhone = false;
   $('password').value = '';
   $('clear-credentials').hidden = true;
-  $('credential-hint').textContent = '已清除保存的登录信息，下次启动请重新填写邮箱和密码。';
+  $('credential-hint').textContent = '已清除保存的登录信息，下次启动请按所选登录方式填写。';
 });
 
 $('save-credentials').addEventListener('click', async () => {
+  if (!customerId || !extractionConfirmed) { setMessage('save-credentials-message', '请先确认资料，再保存当前公司的登录信息。', 'error'); return; }
   setMessage('save-credentials-message', '');
   // 允许在保存前手改 User ID（抓取可能被页面里其它数字干扰）。
   const response = await post('/api/credentials/save', {
     // 解析资料后就知道项目编号，用它作为存储键（和 EORI 那轮对齐）。
     project_code: (extractedValues.project_code || '').trim(),
     credentials: {
-      HMRC_USER_ID: $('gateway-user-id-input').value || $('user-id').value,
-      HMRC_EMAIL: $('email').value,
+      HMRC_USER_ID: $('method').value === 'Government Gateway'
+        ? $('user-id').value || $('gateway-user-id-input').value
+        : $('gateway-user-id-input').value || $('user-id').value,
+      HMRC_EMAIL: $('email').disabled ? '' : $('email').value,
       HMRC_PASSWORD: $('password').value,
-      HMRC_MFA_PHONE: $('phone').value
+      HMRC_MFA_PHONE: $('phone').disabled ? '' : $('phone').value
     }
   });
   const body = await response.json();
   if (!response.ok) { setMessage('save-credentials-message', body.detail || '保存失败', 'error'); return; }
   credentialsStored = true;
   const saved = body.credentials || {};
+  storedHasUserId = !!saved.user_id;
+  storedHasPassword = !!saved.has_password;
+  storedHasEmail = !!saved.email;
+  storedHasPhone = !!saved.has_phone;
   setMessage(
     'save-credentials-message',
-    `已保存${body.key ? '到 ' + body.key : ''}：User ID ${saved.user_id || '（未填）'}`
-      + `${saved.has_password ? '，密码已存' : ''}。本机私有存储（0600），以后输入框留空即用。`,
+    `已保存当前公司的登录信息：税务账号（GG）${saved.user_id || '（未填）'}`
+      + `${saved.has_password ? '，密码已保存' : ''}。下次办理时，已保存的项目可留空。`,
     'ok'
   );
 });
@@ -548,6 +1541,35 @@ $('pause').addEventListener('click', async () => {
   const response = await post('/api/pause');
   const body = await response.json();
   if (!response.ok) setMessage('pause-error', body.detail || '暂停失败', 'error');
+});
+
+$('stop').addEventListener('click', async () => {
+  if (!window.confirm('确定停止本次注册并关闭自动化浏览器吗？已发出的 HMRC 请求无法撤回。')) return;
+  stopInFlight = true;
+  $('stop').disabled = true;
+  $('start').disabled = true;
+  $('send-code').disabled = true;
+  $('pause').disabled = true;
+  $('continue').disabled = true;
+  $('review-confirm').disabled = true;
+  $('review-submit-consent').checked = false;
+  $('remote-edit-submit').disabled = true;
+  $('recording-continue').disabled = true;
+  updateReviewButtons();
+  setMessage('stop-message', '正在请求停止…');
+  try {
+    const response = await post('/api/stop');
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || '停止失败');
+    $('code').value = '';
+    $('review-submit-consent').checked = false;
+    setMessage('stop-message', '已请求停止，正在关闭自动化浏览器…');
+  } catch (error) {
+    setMessage('stop-message', error.message, 'error');
+  } finally {
+    stopInFlight = false;
+    await refresh();
+  }
 });
 
 $('error-hold-resume').addEventListener('click', async () => {
@@ -568,6 +1590,7 @@ $('error-hold-cancel').addEventListener('click', async () => {
 
 $('continue').addEventListener('click', async () => {
   setMessage('pause-error', ''); syncExtractedValues();
+  if (!validateNotificationEmail() || !validateVatNumber()) return;
   if (!extractionConfirmed) {
     setMessage('pause-error', '修改资料后请先点击“确认资料无误”。', 'error');
     return;
@@ -606,7 +1629,7 @@ function renderRemoteEdit(info) {
   if (signature === remoteEditSignature) return;
   remoteEditSignature = signature;
   remoteEditInfo = info;
-  $('remote-edit-heading').textContent = info.heading || '远程修改 HMRC 信息';
+  $('remote-edit-heading').textContent = info.heading || '修改申请信息';
   $('remote-edit-errors').innerHTML = (info.errors || []).map(item => `<li>${esc(item)}</li>`).join('');
   $('remote-edit-fields').innerHTML = (info.fields || []).map((field, fieldIndex) => {
     const key = esc(field.key || '');
@@ -669,10 +1692,9 @@ $('remote-edit-submit').addEventListener('click', async () => {
 });
 
 $('review-submit-consent').addEventListener('change', () => {
-  $('review-confirm').disabled = currentStatus !== 'reviewing' || !$('review-submit-consent').checked;
+  $('review-confirm').disabled = currentStatus !== 'reviewing' || !$('review-submit-consent').checked || stopInFlight;
 });
 
-let isAdmin = false;
 let usersLoaded = false;
 
 async function loadUsers() {
@@ -713,6 +1735,11 @@ $('add-user').addEventListener('click', async () => {
 
 function showAdmin(admin) {
   isAdmin = !!admin;
+  document.querySelectorAll('[data-admin-only]').forEach(element => { element.hidden = !isAdmin; });
+  $('recording-admin-settings').hidden = !isAdmin;
+  $('enable-recording').disabled = !isAdmin || ACTIVE_STATUSES.includes(currentStatus);
+  if (!isAdmin) $('enable-recording').checked = false;
+  $('admin-tools').hidden = !isAdmin;
   $('admin-panel').style.display = isAdmin ? 'block' : 'none';
   if (isAdmin && !usersLoaded) { usersLoaded = true; loadUsers(); }
 }
@@ -748,7 +1775,7 @@ function renderReviewChanges(changes) {
 
 function updateReviewButtons() {
   document.querySelectorAll('.review-change-btn').forEach(button => {
-    button.disabled = currentStatus !== 'reviewing' || reviewEditInFlight;
+    button.disabled = currentStatus !== 'reviewing' || reviewEditInFlight || stopInFlight;
   });
 }
 
@@ -768,7 +1795,7 @@ async function requestReviewEdit(target) {
   }
 }
 
-function showReview(info) {
+function showReview(info, businessName) {
   if (!info || !info.available) {
     $('review').style.display = 'none';
     $('review-submit-consent').checked = false;
@@ -777,16 +1804,14 @@ function showReview(info) {
     return;
   }
   $('review').style.display = 'block';
-  const subject = (extractedValues.business_name || '').trim();
-  $('review-subject').hidden = !subject;
-  if (subject) {
-    $('review-subject').textContent = `将把 ${subject} 的 VAT 注册申请正式提交到 HMRC，操作不可撤销。`;
-  }
+  const subject = (businessName || '').trim();
+  $('review-subject').hidden = false;
+  $('review-subject').textContent = `将把${subject ? ' ' + subject + ' 的' : '本次'} ${currentFlowName}申请正式提交到 HMRC，操作不可撤销。`;
   if (info.pdf) {
-    $('review-download').setAttribute('href', '/api/final-review/pdf');
+    $('review-download').setAttribute('href', apiUrl('/api/final-review/pdf'));
     $('review-download').textContent = '存档：下载完整 PDF';
   } else if (info.png) {
-    $('review-download').setAttribute('href', '/api/final-review/png');
+    $('review-download').setAttribute('href', apiUrl('/api/final-review/png'));
     $('review-download').textContent = '存档：下载完整截图（PDF 生成失败）';
   }
   const changes = info.changes || [];
@@ -800,88 +1825,152 @@ function showReview(info) {
 
 let flowSignature = '';
 function showFlow(flowName, configName) {
+  currentFlowName = flowName || (currentFlow === 'eori' ? '英国 EORI 注册' : '英国 VAT 注册');
   // 同一个服务端配置只渲染一次，避免每秒刷新时反复改写标题。
   const signature = `${flowName}|${configName}`;
   if (signature === flowSignature) return;
   flowSignature = signature;
-  $('brand').textContent = flowName
-    ? `${flowName} · 局域网私有版`
-    : 'GOV.UK 注册助手 · 局域网私有版';
+  $('brand').textContent = flowName || 'GOV.UK 注册助手';
   document.title = flowName ? `${flowName} · 注册助手` : 'GOV.UK 注册助手';
-  $('flow-banner').textContent = configName
-    ? `当前流程：${flowName || '配置里未声明 flow_name'}　配置文件：${configName}`
-    : '';
+  $('flow-banner').textContent = `当前流程：${currentFlowName}`;
 }
 
+let refreshing = false;
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  const revision = statusRevision;
   try {
-    const response = await fetch('/api/status');
+    const response = await fetch(apiUrl('/api/status'));
     if (response.status === 401) { window.location.href = '/login'; return; }
     const state = await response.json();
+    if (revision !== statusRevision) return;
+    if (!response.ok) throw new Error(state.detail || '读取运行状态失败');
+    $('connection-error').hidden = true;
+    currentFlow = state.flow;
+    const optionsSignature = JSON.stringify(state.flows || []);
+    if (optionsSignature !== flowOptionsSignature) {
+      flowOptionsSignature = optionsSignature;
+      $('business-menu').innerHTML = (state.flows || []).map(item =>
+        `<a href="${esc(customerLocation(customerId, item.id))}"${item.id === currentFlow ? ' aria-current="page"' : ''}>${esc(item.name)}</a>`
+      ).join('');
+    }
+    showFlow(state.flow_name || '', state.config || '');
     currentStatus = state.status || 'idle';
+    showAdmin(state.admin);
+    runtimeUsesMailPool = !!state.use_mail_pool;
+    runtimePoolApplicationEmail = state.pool_application_email || '';
+    const poolEmailKey = `${state.run?.id || ''}:${runtimePoolApplicationEmail}`;
+    if (currentFlow === 'vat' && runtimePoolApplicationEmail && poolEmailKey !== appliedPoolApplicationEmail) {
+      extractedValues.email = runtimePoolApplicationEmail;
+      const personalEmail = document.querySelector('[data-extracted-key="email"]');
+      if (personalEmail) personalEmail.value = runtimePoolApplicationEmail;
+      appliedPoolApplicationEmail = poolEmailKey;
+    }
+    if (ACTIVE_STATUSES.includes(currentStatus)) $('use-authenticator').checked = !!state.authenticator?.enabled;
+    $('authenticator-status').textContent = ({
+      active:'当前账号已保存验证器，勾选后可自动填写动态验证码。',
+      pending:'当前账号的验证器尚未确认绑定成功。请联系管理员核实，不要重复注册或重新绑定。',
+      unavailable:'自动处理动态验证码暂不可用，请联系管理员；已有账号仍可使用原验证器手动输入。',
+      missing:'当前账号尚未保存验证器；使用已有账号登录时，需要手动输入动态验证码，不会重新绑定。'
+    })[state.authenticator?.status] || '';
+    mailPoolAvailable = !!state.mail_pool?.enabled;
+    if (!mailPoolAvailable) $('use-mail-pool').checked = false;
+    $('mail-pool-hint').textContent = mailPoolAvailable
+      ? `勾选后自动分配邮箱，${state.mail_pool.auto_code ? '注册账号的邮箱验证码可自动填写。' : '注册账号的邮箱验证码暂需手动输入。'}${currentFlow === 'vat' ? `个人电子邮箱也使用同一地址，${state.mail_pool.vat_auto_code ? '首次验证可自动填码' : '验证码需手动输入'}；公司电子邮箱不变。` : 'EORI 通知邮箱不变。'}`
+      : '自动分配邮箱暂不可用，请手动填写可用邮箱，或联系管理员。';
+    $('mail-pool-diagnostics').textContent = isAdmin
+      ? `邮箱池：已检查 ${state.mail_pool?.ready ?? 0}/${state.mail_pool?.total ?? 0}。${state.mail_pool?.error || ''}` : '';
+    $('pool-email-status').hidden = !state.pool_email;
+    $('pool-email-status').textContent = state.pool_email
+      ? (state.pool_application_email ? `本次注册邮箱 / VAT 个人电子邮箱：${state.pool_email}（公司电子邮箱保持不变）` : `本次注册邮箱：${state.pool_email}（EORI 通知邮箱保持不变）`) : '';
+    showLoginFields();
+    if (currentRunId && state.run?.id && currentRunId !== state.run.id) {
+      $('code').value = '';
+      $('review-submit-consent').checked = false;
+      showReview(null);
+      invalidateConfirmation('办理记录已变更，请核对当前客户资料后重新确认。');
+    }
+    currentRunId = state.run?.id || '';
+    void showAuthenticatorQr(state);
+    showRecording(state);
     $('who').textContent = state.user ? '当前账号：' + state.user : '';
     if ($('config').value !== (state.config || '')) $('config').value = state.config || '';
-    $('status').className = 'status ' + state.status; $('status').textContent = state.message;
-    $('heading').textContent = state.heading ? '页面：' + state.heading : '';
-    $('url').textContent = state.url ? 'URL：' + state.url : '';
+    $('heading').textContent = isAdmin && state.heading ? '页面：' + state.heading : '';
+    $('url').textContent = isAdmin && state.url ? 'URL：' + state.url : '';
     $('otp').style.display = state.status === 'waiting_code' ? 'block' : 'none';
-    $('busy').style.display = state.busy_with ? 'block' : 'none';
+    const otherFlow = state.busy_flow || {};
+    $('busy').style.display = state.busy_with || otherFlow.id ? 'block' : 'none';
     const hold = state.error_hold || {};
+    $('raw-hold-message').textContent = isAdmin && hold.active ? hold.message || '' : '';
     $('error-hold').style.display = hold.active ? 'block' : 'none';
     if (hold.active) {
-      $('error-hold-message').textContent = hold.message || '';
+      $('error-hold-message').textContent = friendlyMessage(hold.message);
       const left = Math.max(0, Math.round((hold.deadline || 0) - Date.now() / 1000));
       $('error-hold-countdown').textContent =
         `剩余 ${Math.floor(left / 60)} 分 ${left % 60} 秒；超时会自动取消这一轮。`;
     }
     if (state.busy_with) $('busy').textContent = `当前有 ${state.busy_with} 的任务在运行，一次只能跑一个客户，请等待其结束。`;
-    $('start').disabled = ['starting','running','waiting_code','pausing','paused','reviewing','editing','holding'].includes(state.status) || !!state.busy_with;
-    $('pause').disabled = state.status !== 'running';
-    $('continue').disabled = state.status !== 'paused';
-    identityCount = state.identity_documents || identityCount;
+    if (otherFlow.id) $('busy').textContent = `${otherFlow.name}有任务正在运行，请切换到该业务处理；结束后可启动当前流程。`;
+    if (otherFlow.customer_id) $('customer-active').innerHTML = `<a href="${esc(customerLocation(otherFlow.customer_id, otherFlow.id))}">返回正在运行的客户任务</a>`;
+    else $('customer-active').textContent = '';
+    const stopping = state.status === 'stopping' || stopInFlight;
+    $('stop').disabled = !ACTIVE_STATUSES.includes(state.status) || stopping;
+    $('stop').textContent = stopping ? '正在停止…' : '停止本次注册';
+    if (state.status === 'stopping') setMessage('stop-message', '正在关闭自动化浏览器，请稍候。');
+    else if (state.status === 'stopped') setMessage('stop-message', '本次注册已停止。请先核实申请状态，再决定是否重新办理。');
+    else if (ACTIVE_STATUSES.includes(state.status) && !stopInFlight) setMessage('stop-message', '');
+    $('start').disabled = !customerId || !customersReady || startInFlight || ACTIVE_STATUSES.includes(state.status) || !!state.busy_with || !!otherFlow.id || stopInFlight;
+    $('send-code').disabled = state.status !== 'waiting_code' || stopping;
+    $('pause').disabled = state.status !== 'running' || stopping;
+    $('continue').disabled = state.status !== 'paused' || stopping;
+    $('error-hold-resume').disabled = stopping;
+    $('error-hold-cancel').disabled = stopping;
+    if (stopping) $('review-submit-consent').checked = false;
+    identityCount = state.identity_documents ?? 0;
     credentialsRemembered = !!state.credentials_saved;
     $('clear-credentials').hidden = !credentialsRemembered;
     credentialsFromEnv = state.credentials_env || [];
+    const stored = state.credentials_stored || {};
     $('gateway-box').hidden = !(state.gateway_user_id || stored.saved);
-    $('gateway-user-id').textContent = state.gateway_user_id || '';
+    $('gateway-user-id').textContent = state.gateway_user_id || stored.user_id || '';
     const gatewayInput = $('gateway-user-id-input');
     if (state.gateway_user_id && !gatewayInput.value) {
       gatewayInput.value = state.gateway_user_id;
     }
     gatewayInput.placeholder = state.gateway_user_id
       ? '' : `留空 = 保留已存的 ${stored.user_id || ''}`;
-    const stored = state.credentials_stored || {};
     storedHasPassword = !!stored.has_password;
+    storedHasUserId = !!stored.user_id;
+    storedHasEmail = !!stored.email;
+    storedHasPhone = !!stored.has_phone;
     if (stored.saved) {
       credentialsStored = true;
-      const scope = state.credential_key && state.credential_key !== state.user
-        ? `该客户（${state.credential_key}）` : '你';
+      const scope = customerName ? `当前客户（${customerName}）` : '你';
       $('credential-hint').textContent =
-        `已保存${scope}的 HMRC 登录信息：User ID ${stored.user_id || '（无）'}`
+        `已保存${scope}的税务登录信息：账号（GG）${stored.user_id || '（无）'}`
         + `${stored.email ? '，邮箱 ' + stored.email : ''}`
         + `${stored.has_password ? '，密码已保存' : '，但没有保存密码'}`
         + `。输入框留空即用。`;
     } else {
       credentialsStored = false;
     }
-    if (!stored.saved && credentialsFromEnv.length) {
-      const fixed = credentialsFromEnv.includes('HMRC_PASSWORD')
-        ? '（含固定密码，所有客户共用）' : '';
-      $('credential-hint').textContent = `已从 .env 读取：${credentialsFromEnv.join('、')}${fixed}，对应输入框可以留空。`;
-    } else if (!stored.saved && credentialsRemembered) {
-      $('credential-hint').textContent = '已记住上次的 HMRC 登录信息（仅本机内存）：失败重试不用再输密码，重启服务即失效。';
+    if (!stored.saved && credentialsRemembered) {
+      $('credential-hint').textContent = '已临时记住本次登录信息，重试时可留空；系统重启后需重新填写。';
+    } else if (!stored.saved) {
+      const defaults = [['HMRC_PASSWORD','登录密码'], ['HMRC_EMAIL','注册邮箱'], ['HMRC_MFA_PHONE','验证手机号']]
+        .filter(([key]) => credentialsFromEnv.includes(key)).map(([, label]) => label);
+      $('credential-hint').textContent = defaults.length
+        ? `已设置默认${defaults.join('、')}，对应输入框可留空。请核对当前公司的账号。`
+        : '请填写当前公司的税务登录信息，可保存供下次办理使用。';
     }
-    if (credentialsFromEnv.includes('HMRC_PASSWORD')) $('password').placeholder = '留空即用 .env 里的固定密码';
-    showFlow(state.flow_name || '', state.config || '');
-    if (!signInMethodPreset && (stored.saved || state.sign_in_method)) {
+    $('password').placeholder = storedHasPassword || credentialsRemembered
+      ? '已保存密码，留空即可' : credentialsFromEnv.includes('HMRC_PASSWORD') ? '已设置默认密码，留空即可' : '';
+    if (!signInMethodPreset && (storedHasUserId || state.sign_in_method)) {
       // 该客户已存过 GG 账号就预选 Government Gateway，否则用流程配置的默认方式。
-      $('method').value = stored.saved ? 'Government Gateway' : state.sign_in_method;
+      $('method').value = storedHasUserId ? 'Government Gateway' : state.sign_in_method;
       signInMethodPreset = true;
-      if (stored.saved) {
-        $('method-hint').textContent =
-          '该客户已有 Government Gateway 账号，登录方式已自动选为 Government Gateway；'
-          + '要重新建号请改成 Create new sign in details。';
-      }
+      showLoginFields();
     }
     const required = Number(state.identity_required ?? 3);
     if (required !== identityRequired) {
@@ -890,14 +1979,35 @@ async function refresh() {
       $('identity-title').textContent = `3. ${required} 份身份证明`;
       $('identity-hint').textContent = `必须一次选择正好 ${required} 份，每份最大 25MB。文件仅供后续 HMRC 页面自动上传。`;
     }
-    showAdmin(state.admin);
-    showReview(state.final_review);
+    showReview(state.final_review, state.business_name);
+    if (stopping) $('remote-edit-submit').disabled = true;
     updateReviewButtons();
-    $('review-confirm').disabled = currentStatus !== 'reviewing' || !$('review-submit-consent').checked;
-    $('events').innerHTML = [...state.events].reverse().map(item => `<li><b>${esc(item.event)}</b>${item.heading ? ' · '+esc(item.heading) : ''}${item.text ? ' · '+esc(item.text) : ''}</li>`).join('');
-  } catch (_) {}
+    $('review-confirm').disabled = currentStatus !== 'reviewing' || !$('review-submit-consent').checked || stopping;
+    showWorkspace(state);
+    const nextHistory = JSON.stringify([state.run?.id, state.status, isAdmin]);
+    if (customerId && nextHistory !== historySignature) {
+      await loadCustomerHistory();
+      historySignature = nextHistory;
+    }
+  } catch (error) {
+    if (revision !== statusRevision) return;
+    clearAuthenticatorQr();
+    $('connection-error').hidden = false;
+    $('connection-error').textContent = '无法读取任务状态：' + friendlyMessage(error.message || '请检查连接') + '。不会自动重新提交或重启任务。';
+    $('status').className = 'status failed';
+    $('status').textContent = friendlyMessage(error.message) || '读取运行状态失败，请刷新重试。';
+    $('start').disabled = true;
+    $('review-confirm').disabled = true;
+    $('send-code').disabled = true;
+    $('pause').disabled = true;
+    $('continue').disabled = true;
+    $('recording-continue').disabled = true;
+    if (workspaceMode === 'run') $('preparation-fields').disabled = true;
+  } finally {
+    refreshing = false;
+  }
 }
-setInterval(refresh,1000); refresh();
+initializeCustomers();
 </script>
 </body>
 </html>
