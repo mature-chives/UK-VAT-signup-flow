@@ -35,7 +35,8 @@ vat_automation/        # 核心自动化包
   cli.py               # vat-register 命令行入口
   web.py               # 单用户本地 Web UI（FastAPI，会话/CSRF/任务管理）
   auth.py              # scrypt 密码散列、会话签名、登录限流（用户名管理）
-  document_parser.py   # 从 PDF/DOCX/XLSX/TXT 等本地提取 VAT 字段（不调用外部 AI/API）
+  document_parser.py   # 从 PDF/DOCX/XLSX/TXT 等本地提取 VAT 字段
+  document_translation.py # 解析后按需调用 DeepSeek 翻译中文地址和业务描述
   customer_store.py    # 公共公司索引、用户私有申请空间及办理记录
   company_identity.py  # 公司身份归一化、USCC 校验和香港 BRN 识别
   countries.py         # 国家字段归一化及明确地址国家片段识别
@@ -130,7 +131,7 @@ python scripts/check_flow_coverage.py vat-config.test.json
 
 - **凭据只经环境变量/内存/本机私有存储传入，不写进流程配置和日志**：`credential_store.py` 管理 0600 凭据文件。工作台按客户保存；vat-web 按登录用户与私有公司归属隔离，同用户同公司可跨 VAT/EORI 复用。旧凭据不自动认领，不以项目编号或全局 `HMRC_USER_ID` 代替客户账号。显式传入凭据 dict，避免密码被 Chrome 子进程继承。密码、验证码不进入状态或审计；当前客户 GG 号可在专用界面供核对，历史记录不保存明文 GG 号。
 - **人工确认后才提交**：到达 `Check your answers` 保存整页复核 PDF 并暂停；只有网页用户明确勾选确认后才点击 `Confirm and submit`；暂停与复核均有 30 分钟超时。
-- 百度翻译密钥放项目根目录 `.env`；邮箱池账号放 `.mail-pool/` 私有存储；Authenticator 主密钥为 `.authenticator-key`，加密种子为 `.authenticator/vault.sqlite3`，不得写进普通凭据或配置。详见对应功能文档。
+- 百度翻译及 DeepSeek API 密钥放项目根目录 `.env`（`DEEPSEEK_API_KEY`）；DeepSeek 仅接收中文地址、业务描述及必要国家／邮编，不接收整份文档或登录凭据。邮箱池账号放 `.mail-pool/` 私有存储；Authenticator 主密钥为 `.authenticator-key`，加密种子为 `.authenticator/vault.sqlite3`，不得写进普通凭据或配置。详见对应功能文档。
 - 动作白名单 `SAFE_ACTIONS`（runner.py）：只允许 `Save and continue` 等安全按钮；未知按钮/缺失必填字段/`action: stop` 停止自动推进并保存现场。Web 可保留浏览器等待人工继续或取消，默认 10 分钟；测试资料安全拦截仍立即结束。认证页面的截图与 URL 需脱敏，不能保存认证秘密。
 - Web 安全：scrypt 密码散列（含用户名不存在的恒时假散列）、登录失败 5 次指数退避锁定、会话 8 小时 TTL（重启即失效）、CSRF（SameSite Cookie + 来源校验 + 请求头令牌）、用户间数据隔离。
 - 局域网模式（`--host 0.0.0.0`）自动生成自签证书（`certs/`，git 忽略），无证书拒绝启动；`--insecure-http` 会明文传输密码/证件，仅调试用。
@@ -139,11 +140,14 @@ python scripts/check_flow_coverage.py vat-config.test.json
 
 ## 当前功能边界与文档入口
 
+- 2026-09-28 新增 DeepSeek 字段翻译：`deepseek-flash`、`https://api.deepseek.com`，从 `.env` 读取配置；未运行测试或真实 API 调用。原文保留，译文需核对；详见 README 的 DeepSeek 资料翻译说明。
+
 - vat-web 主流程：选择 VAT/EORI → 上传解析 → 核对并确认公司关联 → 开始办理 → 最终人工复核。公共公司索引不授予他人的凭据、证件或申请访问权；全服务合计一次一个自动化任务。
 - vat-bench 保持共享客户协作模型；vat-web 的公司隔离、邮箱池和 Authenticator 界面能力不能直接视为工作台已具备。
 - 执行结束与业务成功分开：仅明确回执可判为 HMRC 已接收，明确 EORI 分配页及有效编号才判为已取得 EORI；其余结果待核实，服务重启不自动重提。
 - [公司关联与申请隔离](docs/customer-isolation.md)、[邮箱池](docs/mail-pool.md)、[Authenticator](docs/authenticator.md) 描述新增能力及私有存储边界。Authenticator 文档明确尚未完成真实 HMRC 绑定/登录验证。
 - [历史交接与多国家待办](docs/kimi-handoff.md)：当前已修改地址国家默认值、税号国家固定值；按用户要求未运行测试或检查。地址拆分、邮编和不同国家分支仍待完善。
+- 国家解析优先自动提取：公司地址没有国家或明确省市信息时沿用公司注册地；居住地址独立识别国家或明确中国省市，不套用公司注册地。仅上传识别时补齐，人工清空后不重新兜底。流程读取资料结果，不固定 China。
 - **已确认业务规则：VAT 海外税号直接填写公司注册号**（`company_registration_number`），有号码即选择 Yes；不拆分税号字段，不增加有／没有／未确认选项。税号国家使用公司注册地（`company_registration_country`），不固定为 China。未经用户要求不要再次改为独立税号模型。两个网页入口启动、vat-web 暂停后继续均调用 `validate_application_values()` 校验地址国家。
 - 新建账号以 vat-web 自动管理 Authenticator 为主要使用方式；用户已要求移除新增的短信手机号国家输入和启动必填校验，短信备用方式保留原有设置。不要再次增加国家确认步骤，申请联系手机号与短信验证手机号分别处理。
 - [AI 辅助维护待办](docs/ai-assisted-maintenance-todo.md) 仅为计划，未实现运行时 AI 自动操作。

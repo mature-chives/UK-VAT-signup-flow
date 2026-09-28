@@ -23,6 +23,7 @@ from vat_automation.auth import (
     normalize_username,
 )
 from vat_automation.document_parser import extract_document
+from vat_automation.document_translation import translate_document
 from vat_automation.web import (
     ALLOWED_ENV_KEYS,
     CSRF_COOKIE,
@@ -481,6 +482,7 @@ async def parse_customer_file(
         raise HTTPException(status_code=404, detail="文件已失效。")
     try:
         parsed = extract_document(str(item["name"]), path.read_bytes())
+        parsed = await translate_document(parsed)
     except (OSError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     customer = context.store.get_customer(customer_id) or {}

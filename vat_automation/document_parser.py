@@ -13,7 +13,7 @@ from typing import Any
 from xml.etree import ElementTree
 
 from .company_identity import normalized_identity_values
-from .countries import address_country, normalize_country, split_address_country
+from .countries import address_country, infer_address_country, normalize_country, split_address_country
 
 
 FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -41,6 +41,7 @@ FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
         "业务描述",
         ("business description", "what does the business do", "goods or services", "业务描述", "业务描述（用英文表述）", "经营范围", "销售产品名称（列举1-2个主要产品即可）"),
     ),
+    "business_description_original": ("原始业务描述", ()),
     "estimated_turnover": (
         "预计应税营业额",
         ("estimated taxable turnover", "taxable turnover", "预计应税营业额", "预计营业额", "预估之后连续12个月的总营业额（英镑，大约预估）"),
@@ -148,7 +149,7 @@ VAT_REGISTRATION_FIELD_KEYS = (
     "business_address", "business_postcode",
     "premises", "street", "locality", "city", "region", "postcode",
     "country",
-    "vat_contact_email", "business_phone", "business_description",
+    "vat_contact_email", "business_phone", "business_description", "business_description_original",
     "vat_number", "vat_registration_date",
 )
 
@@ -192,14 +193,7 @@ def extract_document(filename: str, content: bytes) -> dict[str, Any]:
     for raw_key, key in (("business_address", "country"), ("residential_address", "home_country")):
         detected = address_country(parsed_values.get(raw_key, ""))
         if not values.get(key):
-            if key == "country" and values.get("company_registration_country"):
-                warnings.append(
-                    "公司地址未写明国家；公司注册地为 "
-                    + values["company_registration_country"]
-                    + "，请核对公司地址是否位于该国家后填写公司地址国家。"
-                )
-            else:
-                warnings.append(f"未识别到{FIELD_DEFINITIONS[key][0]}，请按该地址资料填写。")
+            warnings.append(f"未能从资料判断{FIELD_DEFINITIONS[key][0]}，请补充。")
         elif detected and detected != normalize_country(values[key]):
             warnings.append(f"{FIELD_DEFINITIONS[key][0]}与原始地址中的国家不一致，请人工核对。")
     if raw_values.get("vat_number") and not re.fullmatch(
@@ -268,6 +262,12 @@ def prepare_document_values(values: Mapping[str, str]) -> dict[str, str]:
 
 def validate_application_values(values: Mapping[str, str], *, is_eori: bool = False) -> None:
     """两个网页入口在启动和继续前共用的地址国家校验。"""
+    english_keys = ["premises", "street", "locality", "city", "region"]
+    if not is_eori:
+        english_keys += ["home_" + key for key in english_keys] + ["business_description"]
+    chinese_fields = [FIELD_DEFINITIONS[key][0] for key in english_keys if re.search(r"[\u3400-\u9fff]", values.get(key, ""))]
+    if chinese_fields:
+        raise ValueError("以下申请字段仍含中文，请翻译或补充英文后再确认：" + "、".join(chinese_fields))
     required = ["country"] if is_eori else ["country", "home_country"]
     missing = [FIELD_DEFINITIONS[key][0] for key in required if not values.get(key, "").strip()]
     if missing:
@@ -725,6 +725,13 @@ def _derive_values(values: dict[str, str]) -> dict[str, str]:
         )
         for key, value in home_address.items():
             derived.setdefault(f"home_{key}", value)
+    # 上传识别时补齐合理默认值；人工编辑和暂停继续不会重新生成已清空字段。
+    if not derived.get("country"):
+        business = ", ".join(derived.get(key, "") for key in ("business_address", "premises", "street", "locality", "city", "region"))
+        derived["country"] = infer_address_country(business) or derived.get("company_registration_country", "")
+    if not derived.get("home_country"):
+        home = ", ".join(derived.get(key, "") for key in ("residential_address", "home_premises", "home_street", "home_locality", "home_city", "home_region"))
+        derived["home_country"] = infer_address_country(home)
     for key in ("country", "home_country", "company_registration_country"):
         if derived.get(key):
             derived[key] = _normalize_country(derived[key])
@@ -820,7 +827,7 @@ def _parse_business_address(raw: str, postcode: str, country: str) -> dict[str, 
     if postcode:
         result["postcode"] = postcode.strip()
     normalized_country = _normalize_country(country)
-    result["country"] = normalized_country or detected_country
+    result["country"] = normalized_country or detected_country or infer_address_country(raw)
     return {key: value for key, value in result.items() if value}
 
 

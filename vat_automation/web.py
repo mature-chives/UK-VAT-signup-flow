@@ -55,6 +55,7 @@ from .document_parser import (
     prepare_document_values,
     validate_application_values,
 )
+from .document_translation import translate_document
 from .envfile import (
     default_env_path,
     env_credentials,
@@ -766,16 +767,26 @@ class JobManager:
             raise RuntimeError(
                 f"无法写入 {self.credential_store.path}：{exc}"
             ) from exc
-        session.saved_credentials = dict(values)
-        session.saved_credentials_key = store_key
-        session.credential_key = store_key
+        self._remember_saved_credentials(session, values, store_key)
         return {
             "status": "saved",
             "path": str(self.credential_store.path),
             "key": store_key,
             "credentials": self.credential_store.public(store_key),
+            "gateway_user_id": values.get("HMRC_USER_ID", ""),
             "updated_at": str(record.get("updated_at", "")),
         }
+
+    def _remember_saved_credentials(
+        self, session: UserSession, values: Mapping[str, str], store_key: str,
+    ) -> None:
+        """人工保存后统一内存来源，防止旧的自动抓取账号重新覆盖修正值。"""
+        with self._lock:
+            session.saved_credentials = dict(values)
+            session.saved_credentials_key = store_key
+            session.credential_key = store_key
+            session.last_credentials = dict(values)
+            session.gateway_user_id = values.get("HMRC_USER_ID", "")
 
     def _record_failure(
         self,
@@ -2012,8 +2023,14 @@ async def save_credentials(
         overrides = dict(request.credentials) if request is not None else {}
         project_code = (request.project_code if request is not None else "").strip()
         manager = context.customer_jobs(username, flow, customer_id)
-        context.credential_managers(manager)
+        related_managers = context.credential_managers(manager)
         result = manager.save_credentials(username, overrides, project_code)
+        # 同用户同公司跨 VAT/EORI 共用凭据，也需要同时失效旧的内存账号。
+        store_key = manager._customer_credential_key()
+        values = manager.credential_store.get(store_key)
+        for related in related_managers:
+            if related is not manager:
+                related._remember_saved_credentials(related.session(username), values, store_key)
         return {**result, "key": "当前客户"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2209,7 +2226,12 @@ async def parse_document(
     if len(content) > 12 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="资料文档不能超过 12MB。")
     try:
-        return extract_document(file.filename or "document.txt", content)
+        manager = context.jobs(flow)
+        parsed = extract_document(file.filename or "document.txt", content)
+        return await translate_document(
+            parsed, env_path=context.env_path,
+            address_format="eori" if "EORI" in manager.flow_name.upper() else "international",
+        )
     except (OSError, ValueError, RuntimeError, zipfile.BadZipFile) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

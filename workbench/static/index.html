@@ -113,6 +113,14 @@
         <div class="row">
           <div><label>公司注册国家 / 地区</label><input data-field="company_registration_country" list="country-options"></div>
         </div>
+        <details><summary>英文地址和业务描述</summary>
+          <div id="translated-address-fields" class="row"></div>
+          <label>业务描述（英文）</label><textarea data-field="business_description"></textarea>
+          <label>原始业务描述</label><textarea data-field="business_description_original" readonly></textarea>
+          <label>原始公司地址</label><textarea data-field="business_address" readonly></textarea>
+          <label>原始居住地址</label><textarea data-field="residential_address" readonly></textarea>
+        </details>
+        <p class="hint">解析时，中文地址和业务描述会按服务配置自动翻译，请核对英文结果。</p>
         <p class="hint">地址国家按各自资料填写。海外税号直接使用公司注册号，税号国家使用公司注册国家 / 地区。修改后请保存客户。</p>
       </details>
       <div class="actions">
@@ -266,6 +274,10 @@ const FIELD_LABELS = {
   company_incorporation_date: "公司成立日期",
   country: "公司地址国家", home_country: "居住国家", company_registration_country: "公司注册地",
 };
+$('translated-address-fields').innerHTML = ['', 'home_'].flatMap(prefix =>
+  [['premises','房间楼栋'],['street','街道'],['locality','区'],['city','城市'],['region','省份'],['postcode','邮编']].map(([key, label]) =>
+    `<div><label>${prefix ? '居住' : '公司'}${label}</label><input data-field="${prefix + key}"></div>`)
+).join('');
 const CATEGORY_LABELS = {
   authorization: "授权表",
   identity: "身份证明",
@@ -953,7 +965,8 @@ $("parse-file").addEventListener("click", async () => {
     const result = await api(`/api/customers/${currentCustomerId}/parse/${parseable.dataset.file}`, {method: "POST"});
     fillFields(result.values || {});
     $("file-msg").className = "msg ok";
-    $("file-msg").textContent = "已解析并写入客户资料";
+    const translated = result.translation?.translated || [];
+    $("file-msg").textContent = ["已解析并写入客户资料", translated.length ? `已翻译${translated.join("、")}，请核对英文结果。` : "", ...(result.warnings || [])].filter(Boolean).join("；");
     await refresh();
     $("customer-select").value = currentCustomerId;
     renderCustomerDetail();

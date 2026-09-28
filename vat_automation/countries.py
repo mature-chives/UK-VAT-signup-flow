@@ -42,4 +42,28 @@ def split_address_country(raw: str) -> tuple[str, str]:
 
 
 def address_country(raw: str) -> str:
-    return split_address_country(raw)[1]
+    country = split_address_country(raw)[1]
+    if country:
+        return country
+    # 中文地址常以国家开头，国家名与省市之间不一定有空格。
+    for prefix, name in (("中国香港", "Hong Kong"), ("香港", "Hong Kong"), ("中华人民共和国", "China"), ("中国", "China"), ("爱尔兰", "Ireland"), ("英国", "United Kingdom")):
+        if raw.strip().startswith(prefix):
+            return name
+    return ""
+
+
+def infer_address_country(raw: str) -> str:
+    """优先使用明确国家；中国省市名称只用于生成待人工核对的提取结果。"""
+    explicit = address_country(raw)
+    if explicit:
+        return explicit
+    provinces = "河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海"
+    cities = "北京|上海|天津|重庆|杭州|宁波|温州|南京|苏州|广州|深圳|成都|武汉|西安|郑州|长沙|福州|厦门|济南|青岛|合肥|南昌|昆明|贵阳|南宁|海口|沈阳|大连|长春|哈尔滨|石家庄|太原|兰州|西宁|银川|乌鲁木齐|拉萨|呼和浩特"
+    if re.search(r"(?:" + provinces + r")省|(?:" + cities + r")市|内蒙古自治区|广西壮族自治区|西藏自治区|宁夏回族自治区|新疆维吾尔自治区", raw):
+        return "China"
+    # 英文地址只取独立省份片段，避免把街道名中的地名当作国家。
+    english = "Hebei|Shanxi|Liaoning|Jilin|Heilongjiang|Jiangsu|Zhejiang|Anhui|Fujian|Jiangxi|Shandong|Henan|Hubei|Hunan|Guangdong|Hainan|Sichuan|Guizhou|Yunnan|Shaanxi|Gansu|Qinghai|Guangxi|Xinjiang|Ningxia|Inner Mongolia"
+    for part in re.split(r"[,，;；\n]", raw):
+        if re.fullmatch(r"(?:" + english + r")(?:\s+(?:Province|Sheng|Autonomous Region))?", part.strip(), re.IGNORECASE):
+            return "China"
+    return ""

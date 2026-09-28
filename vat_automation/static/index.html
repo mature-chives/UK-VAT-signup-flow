@@ -175,7 +175,7 @@
       <div id="source-controls">
       <h2>1. 上传客户资料</h2>
       <input id="source-document" type="file" accept=".pdf,.docx,.xlsx,.txt,.json,.csv,.tsv">
-      <div class="hint">选择文件后自动识别，请核对下方结果。支持 Excel（.xlsx）、Word（.docx）、PDF，最大 12MB。旧版 .xls 请先另存为 .xlsx。</div>
+      <div class="hint">选择文件后自动识别，请核对下方结果。支持 Excel（.xlsx）、Word（.docx）、PDF，最大 12MB。旧版 .xls 请先另存为 .xlsx。启用自动翻译后，中文地址和业务描述会发送给翻译服务，结果请在下方核对。</div>
       <details class="sub-details"><summary>其他支持格式</summary><p class="hint">也支持 TXT、JSON、CSV、TSV。</p></details>
       <button id="parse-document" class="secondary" type="button" disabled>重新识别</button>
       </div>
@@ -201,9 +201,18 @@
         <div id="imported-gateway-box" hidden>
           <p id="imported-gateway-hint" class="hint"></p>
         </div>
+        <div class="row">
+          <div id="mail-pool-options">
+            <label><input id="use-mail-pool" type="checkbox" style="width:auto" disabled> 自动分配注册邮箱</label>
+            <p id="mail-pool-hint" class="hint">正在读取邮箱设置…</p>
+          </div>
+          <div>
+            <label><input id="use-authenticator" type="checkbox" style="width:auto"> 自动处理动态验证码</label>
+            <div id="authenticator-hint" class="hint">新账号会自动设置验证器，并显示二维码供手机添加。已有账号仅在本系统已保存对应验证器时自动填码，否则需手动输入。</div>
+            <div id="authenticator-status" class="hint"></div>
+          </div>
+        </div>
         <div id="new-account-fields">
-          <label><input id="use-mail-pool" type="checkbox" style="width:auto" disabled> 自动分配注册邮箱</label>
-          <p id="mail-pool-hint" class="hint">正在读取邮箱设置…</p>
           <div class="row">
             <div><label for="email">注册邮箱（接收验证码）</label><input id="email" type="email" autocomplete="email"></div>
             <div id="signup-phone-field"><label for="phone">开户验证手机号（接收短信验证码）</label><input id="phone" type="tel" autocomplete="tel"></div>
@@ -211,9 +220,6 @@
           <label for="signup-name">注册姓名</label><input id="signup-name" autocomplete="name">
           <div class="hint">默认使用资料中的联系人姓名。以上信息用于注册税务账号；验证手机号默认使用中国号码。</div>
         </div>
-        <label><input id="use-authenticator" type="checkbox" style="width:auto"> 自动处理动态验证码</label>
-        <div id="authenticator-hint" class="hint">新账号会自动设置验证器，并显示二维码供手机添加。已有账号仅在本系统已保存对应验证器时自动填码，否则需手动输入。</div>
-        <div id="authenticator-status" class="hint"></div>
         <label for="password">税务登录密码</label>
         <input id="password" type="password" autocomplete="new-password">
         <div class="hint" id="credential-hint">可保存当前公司的登录信息，下次办理时使用。</div>
@@ -392,6 +398,7 @@ let identityRequired = 3;
 let credentialsRemembered = false;
 let credentialsFromEnv = [];
 let credentialsStored = false;
+let gatewayInputDirty = false;
 let isAdmin = false;
 let mailPoolAvailable = false;
 let runtimeUsesMailPool = false;
@@ -681,6 +688,7 @@ function clearAccountInputs() {
   $('use-authenticator').checked = false;
   $('authenticator-status').textContent = '';
   for (const id of ['user-id','password','email','phone','gateway-user-id-input','identity-files']) $(id).value = '';
+  gatewayInputDirty = false;
   $('gateway-box').hidden = true;
   $('imported-gateway-box').hidden = true;
   $('gateway-user-id').textContent = '';
@@ -1010,6 +1018,7 @@ function showLoginFields() {
   const automaticMfa = $('use-authenticator').checked;
   const active = ACTIVE_STATUSES.includes(currentStatus);
   $('new-account-fields').hidden = !creating;
+  $('mail-pool-options').hidden = !creating;
   $('existing-account-fields').hidden = creating;
   for (const id of ['email', 'phone', 'signup-name']) $(id).disabled = !creating;
   $('phone').disabled = !creating || automaticMfa;
@@ -1043,7 +1052,7 @@ $('use-authenticator').addEventListener('change', () => {
 showLoginFields();
 
 function fieldLabel(key) {
-  const companyLabels = {business_name:'公司正式名称', company_registration_country:'公司注册国家 / 地区（不是通讯地址）', company_identifier_type:'公司编号类型', company_registration_number:'公司注册号 / 统一社会信用代码 / 香港 BRN', company_incorporation_date:'公司成立日期'};
+  const companyLabels = {business_name:'公司正式名称', company_registration_country:'公司注册国家 / 地区', company_identifier_type:'公司编号类型', company_registration_number:'公司注册号 / 统一社会信用代码 / 香港 BRN', company_incorporation_date:'公司成立日期'};
   if (companyLabels[key]) return companyLabels[key];
   if (key === 'vat_number') return '英国 VAT 号（9 位数字，不含 GB）';
   if (currentFlow === 'eori' && key === 'vat_contact_email') return 'EORI 通知邮箱';
@@ -1083,9 +1092,9 @@ const FIELD_GROUPS = [
   {title:'申请人信息', fields:['full_name','first_name','last_name','birth_date'], required:['full_name','birth_date']},
   {title:'居住地址', lineKeys:['home_premises','home_street','home_locality','home_city','home_region','home_postcode','home_country'], sourceKeys:['residential_address'], sourceTitle:'原始居住地址', required:['home_premises','home_street','home_country']},
   {title:'公司信息', fields:['business_name','company_registration_country','company_identifier_type','company_registration_number','company_incorporation_date'], required:['business_name']},
-  {title:'业务与经营地址', fields:['business_description'], optionalFields:['trading_name'], optionalTitle:'选填：交易名称（不填则沿用公司正式名称）', lineKeys:['premises','street','locality','city','region','postcode','country'], sourceKeys:['business_address','business_postcode'], sourceTitle:'原始注册地址', required:['premises','street','postcode','country','business_description']},
-  {title:'个人联系方式（会进入申请）', fields:['email','phone'], required:['email','phone']},
-  {title:'公司联系方式（会进入申请）', fields:['vat_contact_email','business_phone'], required:[], hint:'公司电子邮箱来自资料中的“VAT沟通邮箱”，不会被自动分配的注册邮箱替换。'},
+  {title:'业务与经营地址', fields:['business_description'], optionalFields:['trading_name'], optionalTitle:'选填：交易名称（不填则沿用公司正式名称）', lineKeys:['premises','street','locality','city','region','postcode','country'], sourceKeys:['business_address','business_postcode','business_description_original'], sourceTitle:'原始地址与业务描述', required:['premises','street','postcode','country','business_description']},
+  {title:'个人联系方式', fields:['email','phone'], required:['email','phone']},
+  {title:'公司联系方式', fields:['vat_contact_email','business_phone'], required:[], hint:'公司电子邮箱来自资料中的“VAT沟通邮箱”，不会被自动分配的注册邮箱替换。'},
 ];
 const EORI_FIELD_GROUPS = [
   {title:'内部管理（选填）', optionalFields:['project_code'], optionalTitle:'项目编号（留空不影响 EORI 注册）', required:[]},
@@ -1273,7 +1282,7 @@ async function parseSelectedDocument() {
   const file = $('source-document').files[0];
   if (!file) { setMessage('parse-message', '请先选择资料文档。', 'error'); return; }
   invalidateConfirmation('正在识别，请完成后重新确认资料。');
-  setMessage('parse-message', '正在上传并识别资料…');
+  setMessage('parse-message', '正在识别资料并处理需要翻译的字段，请稍候…');
   $('imported-gateway-box').hidden = true;
   const data = new FormData(); data.append('file', file);
   parseInFlight = true;
@@ -1296,6 +1305,8 @@ async function parseSelectedDocument() {
         $('imported-gateway-hint').textContent = '已识别表格中的税务账号（GG）；当前正在办理，未更改登录账号。任务结束后重新识别即可自动填入。';
       } else {
         $('user-id').value = gatewayId;
+        $('gateway-user-id-input').value = gatewayId;
+        gatewayInputDirty = true;
         $('method').value = 'Government Gateway';
         signInMethodPreset = true;
         showLoginFields();
@@ -1309,7 +1320,8 @@ async function parseSelectedDocument() {
     const warnings = (body.warnings || []).filter(item => currentFlow !== 'eori'
       || (!item.startsWith('居住地址') && !item.startsWith('未识别到个人电子邮箱')));
     $('parse-warnings').innerHTML = warnings.map(item => `<li>${esc(item)}</li>`).join('');
-    setMessage('parse-message', '资料识别完成，请逐项检查并补充下方内容。', 'ok');
+    const translated = body.translation?.translated || [];
+    setMessage('parse-message', translated.length ? `资料识别完成，已翻译${translated.join('、')}，请核对英文结果。` : '资料识别完成，请逐项检查并补充下方内容。', 'ok');
     await previewCompany();
   } catch (error) { setMessage('parse-message', error.message, 'error'); }
   finally {
@@ -1463,6 +1475,11 @@ $('start-form').addEventListener('submit', async event => {
     if (!response.ok) throw new Error(body.detail || '启动失败');
     $('password').value = '';
     statusRevision += 1; // 丢弃启动前已发出、尚未返回的旧状态请求。
+    gatewayInputDirty = false;
+    if (method === 'Create new sign in details') {
+      $('user-id').value = '';
+      $('gateway-user-id-input').value = '';
+    }
     currentStatus = 'starting';
     runtimeUsesMailPool = useMailPool;
     runtimePoolApplicationEmail = '';
@@ -1497,36 +1514,67 @@ $('clear-credentials').addEventListener('click', async () => {
   $('credential-hint').textContent = '已清除保存的登录信息，下次启动请按所选登录方式填写。';
 });
 
+// 两处账号输入代表同一个登录账号，编辑任意一处时保持一致。
+for (const [source, target] of [['user-id', 'gateway-user-id-input'], ['gateway-user-id-input', 'user-id']]) {
+  $(source).addEventListener('input', () => {
+    $(target).value = $(source).value;
+    gatewayInputDirty = true;
+    setMessage('save-credentials-message', '账号已修改，请填写对应密码并保存。');
+  });
+}
+
 $('save-credentials').addEventListener('click', async () => {
   if (!customerId || !extractionConfirmed) { setMessage('save-credentials-message', '请先确认资料，再保存当前公司的登录信息。', 'error'); return; }
-  setMessage('save-credentials-message', '');
-  // 允许在保存前手改 User ID（抓取可能被页面里其它数字干扰）。
-  const response = await post('/api/credentials/save', {
-    // 解析资料后就知道项目编号，用它作为存储键（和 EORI 那轮对齐）。
-    project_code: (extractedValues.project_code || '').trim(),
-    credentials: {
-      HMRC_USER_ID: $('method').value === 'Government Gateway'
-        ? $('user-id').value || $('gateway-user-id-input').value
-        : $('gateway-user-id-input').value || $('user-id').value,
-      HMRC_EMAIL: $('email').disabled ? '' : $('email').value,
-      HMRC_PASSWORD: $('password').value,
-      HMRC_MFA_PHONE: $('phone').disabled ? '' : $('phone').value
+  const loginId = $('user-id').value.replace(/\s+/g, '');
+  const editedId = $('gateway-user-id-input').value.replace(/\s+/g, '');
+  if (loginId && editedId && loginId !== editedId) {
+    setMessage('save-credentials-message', '两处账号不一致，请按官方页面或邮件重新填写正确账号，两处会同步更新。', 'error'); return;
+  }
+  const userId = loginId || editedId;
+  if (userId && !/^[0-9]{12}$/.test(userId)) {
+    setMessage('save-credentials-message', '税务登录账号（GG）应为 12 位数字，请与官方页面或邮件核对。', 'error'); return;
+  }
+  setMessage('save-credentials-message', '正在保存…');
+  const revision = ++statusRevision; // 丢弃保存前仍在途的状态响应。
+  $('save-credentials').disabled = true;
+  try {
+    const response = await post('/api/credentials/save', {
+      credentials: {
+        HMRC_USER_ID: userId,
+        HMRC_EMAIL: $('email').disabled ? '' : $('email').value,
+        HMRC_PASSWORD: $('password').value,
+        HMRC_MFA_PHONE: $('phone').disabled ? '' : $('phone').value
+      }
+    });
+    const body = await response.json();
+    if (revision !== statusRevision) return;
+    if (!response.ok) throw new Error(body.detail || '保存失败');
+    statusRevision += 1; // 保存期间发出的状态响应也不能回填旧账号。
+    const saved = body.credentials || {};
+    const savedId = body.gateway_user_id || userId;
+    $('user-id').value = savedId;
+    $('gateway-user-id-input').value = savedId;
+    gatewayInputDirty = false;
+    $('gateway-user-id').textContent = savedId || saved.user_id || '';
+    $('password').value = '';
+    if (savedId) {
+      $('method').value = 'Government Gateway';
+      signInMethodPreset = loginMethodChosen = true;
+      showLoginFields();
     }
-  });
-  const body = await response.json();
-  if (!response.ok) { setMessage('save-credentials-message', body.detail || '保存失败', 'error'); return; }
-  credentialsStored = true;
-  const saved = body.credentials || {};
-  storedHasUserId = !!saved.user_id;
-  storedHasPassword = !!saved.has_password;
-  storedHasEmail = !!saved.email;
-  storedHasPhone = !!saved.has_phone;
-  setMessage(
-    'save-credentials-message',
-    `已保存当前公司的登录信息：税务账号（GG）${saved.user_id || '（未填）'}`
-      + `${saved.has_password ? '，密码已保存' : ''}。下次办理时，已保存的项目可留空。`,
-    'ok'
-  );
+    credentialsRemembered = credentialsStored = true;
+    storedHasUserId = !!saved.user_id;
+    storedHasPassword = !!saved.has_password;
+    storedHasEmail = !!saved.email;
+    storedHasPhone = !!saved.has_phone;
+    $('credential-hint').textContent = `当前公司已保存账号（GG）${saved.user_id || '（未填）'}${saved.has_password ? '，密码已保存' : ''}。`;
+    setMessage('save-credentials-message', `已保存当前公司的登录信息：账号（GG）${saved.user_id || '（未填）'}。下次登录使用此账号。`, 'ok');
+    await refresh();
+  } catch (error) {
+    if (revision === statusRevision) setMessage('save-credentials-message', error.message, 'error');
+  } finally {
+    $('save-credentials').disabled = false;
+  }
 });
 
 $('send-code').addEventListener('click', async () => {
@@ -1935,8 +1983,9 @@ async function refresh() {
     $('gateway-box').hidden = !(state.gateway_user_id || stored.saved);
     $('gateway-user-id').textContent = state.gateway_user_id || stored.user_id || '';
     const gatewayInput = $('gateway-user-id-input');
-    if (state.gateway_user_id && !gatewayInput.value) {
+    if (state.gateway_user_id && !gatewayInputDirty) {
       gatewayInput.value = state.gateway_user_id;
+      $('user-id').value = state.gateway_user_id;
     }
     gatewayInput.placeholder = state.gateway_user_id
       ? '' : `留空 = 保留已存的 ${stored.user_id || ''}`;

@@ -226,6 +226,7 @@ class VatAutomation:
                     str(self.settings.profile_dir),
                     channel=self.settings.browser_channel or None,
                     headless=self.settings.headless,
+                    env={key: value for key, value in os.environ.items() if key != "DEEPSEEK_API_KEY"},
                     viewport={"width": 1440, "height": 1000},
                     args=(
                         ["--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0"]
