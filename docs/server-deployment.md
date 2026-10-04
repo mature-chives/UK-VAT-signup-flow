@@ -2,12 +2,16 @@
 
 本项目使用独立 Docker Compose 项目 `uk-vat-signup`，不调整其他容器、代理或服务。Chrome 与 Xvfb 运行在容器内；不安装 OCR 可选依赖。一次仍只运行一个自动化任务。
 
+本次 tCloud 为全新试用环境：不迁移本地客户、GG、邮箱池、验证器、Web 用户或 `.env`。首次创建管理员后，按需独立配置密码、邮箱池及翻译 API。原环境继续保留。
+
 ## 目录与启动
 
 服务器项目目录：`/home/ubuntu/uk-vat-signup`，归属 UID 1000，目录权限 0700。
 
 ```sh
 cd /home/ubuntu/uk-vat-signup
+mkdir -p certs
+chmod 700 certs
 docker compose build web
 docker compose up -d
 ```
