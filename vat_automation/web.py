@@ -62,7 +62,7 @@ from .envfile import (
     load_env_file,
 )
 from .runner import AutomationStopped, VatAutomation, is_skip_edit_action
-from .mail_pool import MailPool, binding_key
+from .mail_pool import MailPool, MailPoolBusy, MailPoolCooldown, binding_key
 from .mail_verification import MailVerifier
 from .skymail import MailError, SkyMailClient
 
@@ -103,6 +103,7 @@ class StartRequest(BaseModel):
     resume: bool = False
     enable_recording: bool = False
     use_mail_pool: bool = False
+    auto_read_email: bool = True
     use_authenticator: bool = False
     credentials: dict[str, str] = Field(default_factory=dict)
     extracted_values: dict[str, str] = Field(default_factory=dict)
@@ -123,6 +124,8 @@ class CustomerDraftRequest(BaseModel):
 
 class CompanyConfirmRequest(CustomerDraftRequest):
     independent: bool = False
+    auto_read_email: bool = False
+    gateway_user_id: str = ""
 
 
 class CredentialSaveRequest(BaseModel):
@@ -212,6 +215,8 @@ class UserSession:
     error_hold: dict[str, Any] = field(default_factory=dict)
     thread: threading.Thread | None = None
     use_mail_pool: bool = False
+    auto_read_email: bool = False
+    pool_lease: str = ""
     pool_existing_email: str = ""
     use_authenticator: bool = False
     # 二维码仅为当前任务临时展示，绝不进入 state/run_record 或 dataclass repr。
@@ -429,6 +434,7 @@ class JobManager:
                 "config": self.config_path.name,
                 "mail_pool": mail_pool_status,
                 "use_mail_pool": session.use_mail_pool,
+                "auto_read_email": session.auto_read_email,
                 "authenticator": {
                     "enabled": session.use_authenticator, "status": "missing",
                     "qr": {
@@ -444,10 +450,32 @@ class JobManager:
                 gateway = self.credential_store.get(session.credential_key).get("HMRC_USER_ID", "")
             if self.customer_scope and gateway:
                 try:
+                    payload["managed_gateway_mailbox"] = {
+                        "gateway": gateway,
+                        "email": self._managed_gateway_email(session.credential_key, gateway),
+                    }
+                except (MailError, AuthenticatorError, OSError, sqlite3.Error):
+                    payload["managed_gateway_mailbox"] = {}
+                try:
                     payload["authenticator"]["status"] = self.authenticator_store.status(session.credential_key, gateway)
                 except AuthenticatorError:
                     payload["authenticator"]["status"] = "unavailable"
         return payload
+
+    def _managed_gateway_email(self, scope: str, gateway: str, *, migrate: bool = False) -> str:
+        """界面预览与启动共用邮箱归属判断；只在启动时落库旧版绑定。"""
+        binding = binding_key(scope)
+        email = self.mail_pool.gateway_email(binding, gateway)
+        if email or not gateway:
+            return email
+        saved = self.credential_store.get(scope)
+        if (saved.get("HMRC_USER_ID") != gateway or not saved.get("HMRC_EMAIL")
+                or self.authenticator_store.status(scope, gateway) != "active"):
+            return ""
+        email = self.mail_pool.gateway_email(binding, gateway, legacy_email=saved["HMRC_EMAIL"])
+        if email and migrate:
+            self.mail_pool.bind_gateway(binding, gateway, email)
+        return email
 
     def start(self, username: str, request: StartRequest) -> None:
         session = self.session(username)
@@ -479,8 +507,6 @@ class JobManager:
                 f"请先保存正好 {self.identity_documents_required} 份身份证明文件。"
             )
 
-        validate_application_values(request.extracted_values, is_eori="EORI" in self.flow_name.upper())
-
         provided = {
             key: value.strip()
             for key, value in request.credentials.items()
@@ -511,6 +537,28 @@ class JobManager:
                 if old_id and provided.get("HMRC_USER_ID", old_id) != old_id and not provided.get("HMRC_PASSWORD"):
                     raise ValueError("GG 账号已变更，请填写对应密码，不可沿用旧账号密码。")
             credentials = {**env_values, **remembered, **stored, **provided}
+            if ("HMRC_SIGN_IN_METHOD" not in provided and "HMRC_SIGN_IN_METHOD" not in env_values
+                    and credentials.get("HMRC_USER_ID")):
+                credentials["HMRC_SIGN_IN_METHOD"] = "Government Gateway"
+            method = credentials.get("HMRC_SIGN_IN_METHOD", self.default_sign_in_method)
+            if self.customer_scope and old_id and credentials.get("HMRC_USER_ID") != old_id:
+                # 换 GG 不沿用旧邮箱、手机号及 MFA 偏好；托管能力另按新 GG 查询。
+                for key in ("HMRC_EMAIL", "HMRC_MFA_METHOD", "HMRC_MFA_PHONE",
+                            "HMRC_MFA_PHONE_IS_UK", "HMRC_MFA_PHONE_COUNTRY"):
+                    if key not in provided:
+                        credentials.pop(key, None)
+            if (request.auto_read_email and self.customer_scope
+                    and method == "Government Gateway"):
+                try:
+                    bound_email = self._managed_gateway_email(
+                        session.credential_key, credentials.get("HMRC_USER_ID", ""),
+                    )
+                except (MailError, AuthenticatorError, OSError, sqlite3.Error):
+                    bound_email = ""
+                if bound_email:
+                    email_key = "vat_contact_email" if self.customer_scope[2] == "eori" else "email"
+                    request.extracted_values = {**request.extracted_values, email_key: bound_email}
+            validate_application_values(request.extracted_values, is_eori="EORI" in self.flow_name.upper())
             if request.use_authenticator:
                 method = credentials.get("HMRC_SIGN_IN_METHOD", self.default_sign_in_method)
                 if method == "Create new sign in details" and credentials.get("HMRC_USER_ID"):
@@ -521,7 +569,11 @@ class JobManager:
                     self.authenticator_store.prepare()
                 except (AuthenticatorError, OSError):
                     raise ValueError("Authenticator 私有存储不可用，请管理员检查主密钥、权限与依赖。") from None
-                credentials["HMRC_MFA_METHOD"] = "Authenticator app for smartphone or tablet"
+                if (method == "Create new sign in details"
+                        or self.authenticator_store.status(session.credential_key, credentials.get("HMRC_USER_ID", "")) == "active"):
+                    credentials["HMRC_MFA_METHOD"] = "Authenticator app for smartphone or tablet"
+                elif method == "Government Gateway":
+                    credentials.pop("HMRC_MFA_METHOD", None)
             if request.use_mail_pool:
                 if not self.customer_scope:
                     raise ValueError("请先确认公司资料，再使用邮箱池。")
@@ -567,6 +619,8 @@ class JobManager:
                 session.saved_credentials_key = session.credential_key
             session.last_credentials = dict(credentials)
             session.use_mail_pool = request.use_mail_pool
+            session.auto_read_email = bool(self.customer_scope and (request.use_mail_pool or request.auto_read_email))
+            session.pool_lease = ""
             session.use_authenticator = request.use_authenticator
             self._clear_authenticator_qr(session)
             session.authenticator_qr_allowed = request.use_authenticator
@@ -717,6 +771,14 @@ class JobManager:
         """新建 Government Gateway 账号后立刻记下并落库，中途中断也不丢账号。"""
         session.gateway_user_id = str(user_id).strip()
         self._persist_credentials(session)
+        if session.use_mail_pool and session.pool_lease:
+            try:
+                self.mail_pool.bind_gateway(
+                    binding_key(session.credential_key), session.gateway_user_id,
+                    session.last_credentials.get("HMRC_EMAIL", ""), lease=session.pool_lease,
+                )
+            except (MailError, OSError, sqlite3.Error):
+                session.state["mail_notice"] = "GG 已保存，但邮箱绑定记录失败；以后取码可能需人工处理。"
 
     def last_run_credentials(self, username: str) -> dict[str, str]:
         """上一次运行实际使用的登录信息（含新建的 Gateway User ID）。
@@ -759,6 +821,11 @@ class JobManager:
             old_id = stored.get("HMRC_USER_ID") or session.last_credentials.get("HMRC_USER_ID")
             if old_id and new_id and old_id != new_id and not (overrides or {}).get("HMRC_PASSWORD"):
                 raise ValueError("GG 账号已变更，请填写对应密码。")
+            if old_id and new_id and old_id != new_id:
+                for field in ("HMRC_EMAIL", "HMRC_MFA_METHOD", "HMRC_MFA_PHONE",
+                              "HMRC_MFA_PHONE_IS_UK", "HMRC_MFA_PHONE_COUNTRY"):
+                    if not str((overrides or {}).get(field, "")).strip():
+                        values.pop(field, None)
         if not values.get("HMRC_PASSWORD"):
             raise ValueError("还没有可保存的密码：请先填一次密码并启动过任务。")
         try:
@@ -894,12 +961,13 @@ class JobManager:
             session.state["message"] = "正在等待当前页面操作到达安全暂停点"
 
     def effective_application_values(self, username: str, values: Mapping[str, str]) -> dict[str, str]:
-        """池内个人邮箱是本次 VAT 的运行策略，暂停修改不能换回解析邮箱。"""
+        """保留本次自动选择的申请邮箱，暂停修改不能换回解析邮箱。"""
         session = self.session(username)
         effective = dict(values)
         with self._lock:
             if session.state["status"] in ACTIVE_STATES and session.state.get("pool_application_email"):
-                effective["email"] = session.state["pool_application_email"]
+                key = "vat_contact_email" if self.customer_scope and self.customer_scope[2] == "eori" else "email"
+                effective[key] = session.state["pool_application_email"]
         return effective
 
     def continue_after_pause(self, username: str, request: ContinueRequest) -> dict[str, str]:
@@ -1044,12 +1112,17 @@ class JobManager:
 
     async def _mail_code(self, session: UserSession, verifier: MailVerifier, heading: str) -> str:
         if verifier.cursor is None or verifier.attempted:
-            return await self._verification_code(session, heading, verifier.notice)
+            reason = verifier.notice or (
+                "本环节已自动尝试一次验证码，请核对验证结果后接管。"
+                if verifier.attempted else "本次邮箱自动取码尚未完成初始化，请检查流程和邮箱状态。"
+            )
+            return await self._verification_code(session, heading, reason)
         manual = asyncio.create_task(self._verification_code(
             session, heading,
-            ("正在自动读取本次 VAT 个人邮箱验证邮件；也可以直接手动输入验证码。"
-             if verifier.purpose == "vat_personal_email"
-             else "正在自动读取本次 GG 建号邮件；也可以直接手动输入验证码。")
+            "正在自动读取本次" + {
+                "vat_personal_email": " VAT 个人邮箱", "eori_notification": " EORI 通知邮箱",
+                "gg_login": " GG 登录邮箱", "gg_signup": " GG 建号邮箱",
+            }.get(verifier.purpose, "邮箱") + "验证邮件；也可以直接手动输入验证码。"
         ))
         automatic = asyncio.create_task(verifier.receive())
         try:
@@ -1076,6 +1149,9 @@ class JobManager:
                     session.state["status"] = "running"
                     session.state["message"] = "已匹配本次邮件，正在验证；不会展示或记录验证码。"
                 return code
+            with self._lock:
+                if session.state["status"] == "waiting_code":
+                    session.state["message"] = "自动读取超时，未找到匹配本次运行的验证邮件，请确认邮件是否已送达。"
             return await manual
         finally:
             manual.cancel()
@@ -1088,10 +1164,10 @@ class JobManager:
             for key, value in record.items()
             if key in {"time", "event", "step", "url", "heading", "text", "reason"}
         }
-        if str(record.get("event", "")).startswith("authenticator-"):
+        if str(record.get("event", "")).startswith(("authenticator-", "eori-email-")):
             safe["text"] = str(record.get("message", ""))
         with self._lock:
-            if safe.get("text") and str(record.get("event", "")).startswith("authenticator-") and not session.stop_requested.is_set():
+            if safe.get("text") and str(record.get("event", "")).startswith(("authenticator-", "eori-email-")) and not session.stop_requested.is_set():
                 session.state["message"] = safe["text"]
             if session.run_record and record.get("event") in {"final-review-confirmed", "application-submitted"}:
                 session.run_record["submission_confirmed"] = True
@@ -1299,6 +1375,29 @@ class JobManager:
             if "/file-upload/upload-document" in page.path_contains:
                 page.action = "continue"
 
+    def _acquire_mailbox(self, session: UserSession, binding: str, lease: str,
+                         preferred_email: str = "", **options: str) -> dict[str, Any]:
+        """在浏览器启动前等待冷却；同客户、同 GG 的重试由邮箱池直接复用。"""
+        while True:
+            self._check_stop_requested(session)
+            try:
+                allocation = self.mail_pool.acquire(binding, lease, preferred_email, **options)
+                with self._lock:
+                    session.state.pop("mail_wait_seconds", None)
+                    session.state["message"] = "邮箱已就绪，正在启动浏览器。"
+                return allocation
+            except MailPoolCooldown as exc:
+                remaining = max(1, int(exc.until - time.time()) + 1)
+                with self._lock:
+                    session.state["mail_wait_seconds"] = remaining
+                    session.state["message"] = f"邮箱冷却中，约 {remaining} 秒后自动继续；可随时停止。"
+                session.stop_requested.wait(min(1, remaining))
+            except MailPoolBusy:
+                with self._lock:
+                    session.state.pop("mail_wait_seconds", None)
+                    session.state["message"] = "邮箱正被其他任务使用，释放后自动继续；可随时停止。异常占用需管理员解除。"
+                session.stop_requested.wait(1)
+
     def _run(
         self,
         session: UserSession,
@@ -1308,7 +1407,10 @@ class JobManager:
         resume: bool,
     ) -> None:
         mail_allocation: dict[str, Any] | None = None
+        notification_allocation: dict[str, Any] | None = None
+        managed_application_email = ""
         mail_lease = uuid.uuid4().hex
+        notification_lease = uuid.uuid4().hex
         terminal = ("failed", "自动化未正常结束，请检查后再重试。")
         try:
             settings = load_settings(self.config_path)
@@ -1322,16 +1424,11 @@ class JobManager:
             self._enable_identity_uploads(session, settings)
             if session.use_mail_pool:
                 self._check_stop_requested(session)
-                mail_allocation = self.mail_pool.acquire(
-                    binding_key(session.credential_key), mail_lease, session.pool_existing_email
+                mail_allocation = self._acquire_mailbox(
+                    session, binding_key(session.credential_key), mail_lease, session.pool_existing_email
                 )
+                session.pool_lease = mail_lease
                 credentials["HMRC_EMAIL"] = mail_allocation["email"]
-                # 仅 VAT 个人联系邮箱复用本次 GG 邮箱；公司及 EORI 通知邮箱不变。
-                if self.customer_scope and self.customer_scope[2] == "vat":
-                    extracted_values["email"] = mail_allocation["email"]
-                    bag["email"] = mail_allocation["email"]
-                    if self.customer_store:
-                        self.customer_store.save_draft(*self.customer_scope, extracted_values)
                 # 邮箱密码不放进 HMRC 凭据、不传给 Chrome；只保存实际开户地址。
                 self.credential_store.save(session.credential_key, {"HMRC_EMAIL": mail_allocation["email"]})
                 with self._lock:
@@ -1339,14 +1436,53 @@ class JobManager:
                     session.saved_credentials = dict(credentials)
                     session.saved_credentials_key = session.credential_key
                     session.state["pool_email"] = mail_allocation["email"]
-                    if self.customer_scope and self.customer_scope[2] == "vat":
-                        session.state["pool_application_email"] = mail_allocation["email"]
-                        session.run_record["application_email"] = mail_allocation["email"]
-                        self._save_run_record(session)
                     session.state["message"] = "已分配开户邮箱，正在启动浏览器。"
+
+            elif session.auto_read_email and credentials.get("HMRC_SIGN_IN_METHOD", self.default_sign_in_method) == "Government Gateway":
+                gateway = credentials.get("HMRC_USER_ID", "")
+                binding = binding_key(session.credential_key)
+                try:
+                    email = self._managed_gateway_email(session.credential_key, gateway, migrate=True)
+                    if email:
+                        managed_application_email = email
+                        mail_allocation = self._acquire_mailbox(session, binding, mail_lease, existing_gateway=gateway)
+                        credentials["HMRC_EMAIL"] = mail_allocation["email"]
+                        session.last_credentials = dict(credentials)
+                        session.state["pool_email"] = mail_allocation["email"]
+                    else:
+                        session.state["mail_notice"] = "当前 GG 没有可确认的托管邮箱，邮箱验证需人工接收。"
+                except (MailError, AuthenticatorError, OSError, sqlite3.Error):
+                    session.state["mail_notice"] = "原邮箱自动读取暂不可用，遇到邮箱验证时请人工输入。"
+
+            if session.auto_read_email and self.customer_scope and (mail_allocation or managed_application_email):
+                # 新建和已有 GG 均同步申请邮箱；VAT 公司邮箱保持资料中的值。
+                email = mail_allocation["email"] if mail_allocation else managed_application_email
+                email_key = "vat_contact_email" if self.customer_scope[2] == "eori" else "email"
+                extracted_values[email_key] = email
+                bag[email_key] = email
+                if self.customer_store:
+                    self.customer_store.save_draft(*self.customer_scope, extracted_values)
+                with self._lock:
+                    session.state["pool_application_email"] = email
+                    session.run_record["application_email"] = email
+                    self._save_run_record(session)
+
+            if session.auto_read_email and self.customer_scope:
+                application_email = bag.get("vat_contact_email" if self.customer_scope[2] == "eori" else "email", "")
+                if mail_allocation and application_email.casefold() == mail_allocation["email"].casefold():
+                    notification_allocation = mail_allocation
+                elif application_email:
+                    try:
+                        notification_allocation = self._acquire_mailbox(
+                            session, binding_key(session.credential_key), notification_lease,
+                            notification_email=application_email,
+                        )
+                    except (MailError, OSError, sqlite3.Error):
+                        session.state["mail_notice"] = "申请联系邮箱未托管或暂不可读取，该邮箱验证码需人工输入。"
 
             async def execute(
                 verifier: MailVerifier | None = None, vat_verifier: MailVerifier | None = None,
+                eori_verifier: MailVerifier | None = None,
             ) -> None:
                 self._check_stop_requested(session)
                 async def pause_checkpoint(url: str, heading: str) -> None:
@@ -1354,8 +1490,9 @@ class JobManager:
                     if updates:
                         bag.clear()
                         bag.update(prepare_document_values(updates))
-                        if mail_allocation is not None and self.customer_scope and self.customer_scope[2] == "vat":
-                            bag["email"] = mail_allocation["email"]
+                        if self.customer_scope and session.state.get("pool_application_email"):
+                            email_key = "vat_contact_email" if self.customer_scope[2] == "eori" else "email"
+                            bag[email_key] = session.state["pool_application_email"]
 
                 runner = VatAutomation(
                     settings,
@@ -1385,6 +1522,9 @@ class JobManager:
                     email_verification_provider=partial(self._mail_code, session, verifier) if verifier else None,
                     vat_email_verification_prepare=vat_verifier.prepare if vat_verifier else None,
                     vat_email_verification_provider=partial(self._mail_code, session, vat_verifier) if vat_verifier else None,
+                    eori_email_verification_prepare=eori_verifier.prepare if eori_verifier else None,
+                    eori_email_verification_provider=partial(self._mail_code, session, eori_verifier) if eori_verifier else None,
+                    login_email_verification=not session.use_mail_pool,
                     authenticator=AuthenticatorFlow(
                         self.authenticator_store, session.credential_key,
                         allow_setup=credentials.get("HMRC_SIGN_IN_METHOD", self.default_sign_in_method) == "Create new sign in details",
@@ -1409,17 +1549,33 @@ class JobManager:
                         await watcher
 
             async def execute_with_mail() -> None:
-                if mail_allocation is None:
-                    await execute()
-                    return
-                async with SkyMailClient(mail_allocation["base_url"], mail_allocation["email"],
-                                         mail_allocation["password"]) as client:
-                    # 同一邮箱和客户端，不同用途各自持有游标、发码时间及尝试状态。
-                    vat_verifier = (
-                        MailVerifier(self.mail_pool, mail_allocation, client, purpose="vat_personal_email")
-                        if self.customer_scope and self.customer_scope[2] == "vat" else None
-                    )
-                    await execute(MailVerifier(self.mail_pool, mail_allocation, client), vat_verifier)
+                from contextlib import AsyncExitStack
+
+                async with AsyncExitStack() as stack:
+                    clients: dict[str, SkyMailClient] = {}
+                    for allocation in (mail_allocation, notification_allocation):
+                        if allocation and allocation["email"] not in clients:
+                            clients[allocation["email"]] = await stack.enter_async_context(SkyMailClient(
+                                allocation["base_url"], allocation["email"], allocation["password"],
+                            ))
+                    verifier = MailVerifier(
+                        self.mail_pool, mail_allocation, clients[mail_allocation["email"]],
+                        purpose="gg_signup" if session.use_mail_pool else "gg_login",
+                    ) if mail_allocation else None
+                    is_eori = bool(self.customer_scope and self.customer_scope[2] == "eori")
+                    application_verifier = MailVerifier(
+                        self.mail_pool, notification_allocation, clients[notification_allocation["email"]],
+                        purpose="eori_notification" if is_eori else "vat_personal_email",
+                    ) if notification_allocation else None
+                    if is_eori and application_verifier is not None:
+                        # 在任何 HMRC 页面打开前记下邮件起点，直接进入验证码页也不会漏接。
+                        self._check_stop_requested(session)
+                        ready = await application_verifier.prime(bag.get("vat_contact_email", ""))
+                        if not ready:
+                            raise MailError(application_verifier.notice or "EORI 邮箱读取初始化失败，尚未启动浏览器。")
+                        self._check_stop_requested(session)
+                    await execute(verifier, None if is_eori else application_verifier,
+                                  application_verifier if is_eori else None)
 
             try:
                 if fresh_session:
@@ -1446,12 +1602,18 @@ class JobManager:
         else:
             terminal = ("completed", "流程已完成")
         finally:
+            if notification_allocation is not None and notification_allocation is not mail_allocation:
+                try:
+                    self.mail_pool.release(notification_lease)
+                except (MailError, OSError, sqlite3.Error):
+                    terminal = (terminal[0], terminal[1] + "（通知邮箱占用释放失败，请管理员检查。）")
             if mail_allocation is not None:
                 try:
                     self.mail_pool.release(mail_lease)
                 except (MailError, OSError, sqlite3.Error):
                     # 保留占用而非冒险重复分配；管理员在确认任务已停后可本地解除。
                     terminal = (terminal[0], terminal[1] + "（邮箱占用释放失败，请管理员检查。）")
+            session.pool_lease = ""
             self._set_terminal_state(session, *terminal)
 
 
@@ -1871,7 +2033,22 @@ async def confirm_company(payload: CompanyConfirmRequest, username: str = Depend
                 context.customers().save_draft(owner, customer_id, flow or context.default_flow, payload.values)
                 return {"customer_id": customer_id, "customer_name": context.customers().get(owner, customer_id)["name"], "values": normalized_identity_values(payload.values), "association": "unchanged", "preview": context.customers().preview(payload.values)}
         validate_application_values(payload.values, is_eori="EORI" in flow_manager.flow_name.upper())
-        return context.customers().confirm_company(owner, flow or context.default_flow, payload.values, customer_id, payload.independent)
+        result = context.customers().confirm_company(owner, flow or context.default_flow, payload.values, customer_id, payload.independent)
+        # 同一次确认完成客户关联、GG 邮箱解析及最终资料保存。
+        if payload.auto_read_email:
+            manager = context.customer_jobs(username, flow, result["customer_id"])
+            scope = manager._customer_credential_key()
+            gateway = payload.gateway_user_id.strip() or manager.credential_store.get(scope).get("HMRC_USER_ID", "")
+            try:
+                email = manager._managed_gateway_email(scope, gateway)
+            except (MailError, AuthenticatorError, OSError, sqlite3.Error):
+                email = ""
+            result["managed_gateway_mailbox"] = {"gateway": gateway, "email": email}
+            if email:
+                email_key = "vat_contact_email" if manager.customer_scope[2] == "eori" else "email"
+                result["values"] = {**result["values"], email_key: email}
+                context.customers().save_draft(*manager.customer_scope, result["values"])
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

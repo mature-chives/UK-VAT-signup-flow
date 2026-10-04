@@ -34,6 +34,14 @@ class AuthenticatorFlow:
                 and parsed.hostname in {"access.service.gov.uk", "www.access.service.gov.uk"}
                 and parsed.path.startswith("/multi-factor/"))
 
+    @staticmethod
+    def is_totp_challenge(url: str) -> bool:
+        """已有 GG 登录使用独立 TOTP 路由，正文可能包含用户自定义的验证器名称。"""
+        path = urlparse(url).path.rstrip("/")
+        return (AuthenticatorFlow.is_mfa_page(url)
+                and (path == "/multi-factor/challenge-totp"
+                     or path.startswith("/multi-factor/challenge-totp/")))
+
     async def handle(
         self, page: Any, heading: str, gateway: str, *,
         click: Callable[[Any, tuple[str, ...]], Awaitable[bool]],
@@ -106,9 +114,10 @@ class AuthenticatorFlow:
             del qr_png
             return await advance("authenticator-staged", "Authenticator 密钥已加密保存，等待验证绑定。")
 
-        if title == normalize("Enter the access code") and normalize(
-            "6 digit access code shown on your authenticator app"
-        ) in body:
+        if title == normalize("Enter the access code") and (
+            self.is_totp_challenge(page.url)
+            or normalize("6 digit access code shown on your authenticator app") in body
+        ):
             status = self.store.status(self.scope, gateway)
             binding = bool(self.binding_gateway and self.binding_gateway == gateway)
             if self.code_attempted or (status != "active" and not binding):

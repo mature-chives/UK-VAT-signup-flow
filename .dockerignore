@@ -1,0 +1,15 @@
+**
+!pyproject.toml
+!uv.lock
+!README.md
+!vat-config.flow.json
+!vat-config.eori.flow.json
+!vat_automation/
+!vat_automation/**
+!workbench/
+!workbench/**
+!deploy/
+!deploy/Dockerfile
+!deploy/start.sh
+**/__pycache__/
+**/*.pyc

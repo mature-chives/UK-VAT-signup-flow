@@ -183,7 +183,6 @@
       <ul id="parse-warnings" class="warnings"></ul>
       <div id="extracted-groups"></div>
       <div id="company-association" class="notice" hidden role="status"></div>
-      <label id="company-independent-label" hidden><input id="company-independent" type="checkbox" style="width:auto"> 已核对提示，本次仅作为独立申请，不关联或覆盖已有公司</label>
       <button id="confirm-extraction" type="button" disabled>确认资料无误</button>
       <div id="confirm-message" class="message"></div>
     </div>
@@ -203,25 +202,29 @@
         </div>
         <div class="row">
           <div id="mail-pool-options">
-            <label><input id="use-mail-pool" type="checkbox" style="width:auto" disabled> 自动分配注册邮箱</label>
+            <label id="allocate-mail-label"><input id="use-mail-pool" type="checkbox" style="width:auto" checked disabled> 自动分配注册邮箱</label>
+            <label id="read-mail-label" hidden><input id="auto-read-email" type="checkbox" style="width:auto" checked> 自动读取已绑定邮箱验证码</label>
             <p id="mail-pool-hint" class="hint">正在读取邮箱设置…</p>
+            <p id="mail-reuse-notice" class="hint" hidden></p>
           </div>
           <div>
-            <label><input id="use-authenticator" type="checkbox" style="width:auto"> 自动处理动态验证码</label>
+            <label><input id="use-authenticator" type="checkbox" style="width:auto" checked> 自动处理动态验证码</label>
             <div id="authenticator-hint" class="hint">新账号会自动设置验证器，并显示二维码供手机添加。已有账号仅在本系统已保存对应验证器时自动填码，否则需手动输入。</div>
             <div id="authenticator-status" class="hint"></div>
           </div>
         </div>
         <div id="new-account-fields">
-          <div class="row">
-            <div><label for="email">注册邮箱（接收验证码）</label><input id="email" type="email" autocomplete="email"></div>
+          <div class="row" id="signup-contact-fields">
+            <div id="signup-email-field"><label for="email">注册邮箱（接收验证码）</label><input id="email" type="email" autocomplete="email"></div>
             <div id="signup-phone-field"><label for="phone">开户验证手机号（接收短信验证码）</label><input id="phone" type="tel" autocomplete="tel"></div>
           </div>
           <label for="signup-name">注册姓名</label><input id="signup-name" autocomplete="name">
-          <div class="hint">默认使用资料中的联系人姓名。以上信息用于注册税务账号；验证手机号默认使用中国号码。</div>
+          <div class="hint">默认使用资料中的联系人姓名，用于注册税务账号。</div>
         </div>
-        <label for="password">税务登录密码</label>
-        <input id="password" type="password" autocomplete="new-password">
+        <div id="password-field">
+          <label for="password">税务登录密码</label>
+          <input id="password" type="password" autocomplete="new-password">
+        </div>
         <div class="hint" id="credential-hint">可保存当前公司的登录信息，下次办理时使用。</div>
         <div id="gateway-box" hidden>
           <p class="hint">税务登录账号（GG）：<b id="gateway-user-id"></b></p>
@@ -229,7 +232,6 @@
           <input id="gateway-user-id-input" autocomplete="off" inputmode="numeric">
         </div>
         <button id="save-credentials" class="secondary" type="button">保存登录信息</button>
-        <button id="clear-credentials" class="secondary" type="button" hidden>清除已保存的登录信息</button>
         <div id="save-credentials-message" class="message"></div>
       </div>
 
@@ -294,6 +296,7 @@
     </div>
     <div class="task-status"><div id="status" class="status" role="status" aria-live="polite">尚未启动</div></div>
     <p id="pool-email-status" class="hint" hidden></p>
+    <p id="task-mail-notice" class="hint" hidden></p>
     <section id="authenticator-qr-card" class="card" hidden aria-labelledby="authenticator-qr-title">
       <h2 id="authenticator-qr-title">请用手机添加 Authenticator</h2>
       <div class="authenticator-qr-layout">
@@ -399,6 +402,7 @@ let credentialsRemembered = false;
 let credentialsFromEnv = [];
 let credentialsStored = false;
 let gatewayInputDirty = false;
+let managedGatewayMailbox = {};
 let isAdmin = false;
 let mailPoolAvailable = false;
 let runtimeUsesMailPool = false;
@@ -684,15 +688,17 @@ function clearAccountInputs() {
   runtimeUsesMailPool = false;
   runtimePoolApplicationEmail = '';
   appliedPoolApplicationEmail = '';
-  $('use-mail-pool').checked = false;
-  $('use-authenticator').checked = false;
+  $('use-mail-pool').checked = mailPoolAvailable;
+  $('auto-read-email').checked = true;
+  $('use-authenticator').checked = true;
+  $('enable-recording').checked = false;
   $('authenticator-status').textContent = '';
   for (const id of ['user-id','password','email','phone','gateway-user-id-input','identity-files']) $(id).value = '';
   gatewayInputDirty = false;
+  managedGatewayMailbox = {};
   $('gateway-box').hidden = true;
   $('imported-gateway-box').hidden = true;
   $('gateway-user-id').textContent = '';
-  $('clear-credentials').hidden = true;
   $('credential-hint').textContent = '请填写当前公司的登录信息，不会使用上一家公司或其他用户的账号。';
   for (const id of ['identity-message','save-credentials-message']) setMessage(id, '');
   identityCount = 0;
@@ -708,23 +714,28 @@ function detachCompany() {
   currentStatus = 'idle'; preparationRequested = true;
   historySignature = ''; flowOptionsSignature = '';
   clearAccountInputs();
-  $('company-independent').checked = false;
+  updateCompanyConfirmation();
   $('customer-history').hidden = true;
   history.replaceState(null, '', customerLocation(''));
   showWorkspace({status:'idle', events:[]});
 }
 
+function updateCompanyConfirmation(conflict = false) {
+  const button = $('confirm-extraction');
+  button.dataset.independent = conflict ? 'true' : 'false';
+  button.textContent = conflict ? '确认资料，作为独立申请保存' : '确认资料无误';
+}
+
 function showAssociation(result) {
   const identity = result.identity || {};
-  const titles = {new:'已识别公司：确认资料时自动建立关联。', matched:'已匹配已有公司：确认资料后关联。', conflict:'识别编号一致，但公司名称或成立日期冲突，不会自动合并。', unresolved:'本次暂不自动关联公司，可作为独立申请继续办理。'};
+  const titles = {new:'已识别公司：确认资料时自动建立关联。', matched:'已匹配已有公司：确认资料后关联。', conflict:'识别编号一致，但公司名称或成立日期冲突。请核对并修正资料；若确认当前资料无误，可点击下方按钮保存为独立申请，不关联或覆盖已有公司。', unresolved:'本次暂不自动关联公司，可作为独立申请继续办理。'};
   $('company-association').hidden = false;
   $('company-association').textContent = (titles[result.status] || '')
     + ` ${identity.jurisdiction || '注册地待核对'} · ${identity.type || '编号类型待核对'} · ${identity.number || '未提供编号'}。 `
     + (result.company ? `已有公司：${result.company.name}${result.company.incorporation_date ? '，成立日期 '+result.company.incorporation_date : ''}。 ` : '')
     + (identity.message || '')
     + ' 仅共享公司基础信息，不共享登录信息、证件或个人资料。';
-  $('company-independent-label').hidden = result.status !== 'conflict';
-  if (result.status !== 'conflict') $('company-independent').checked = false;
+  updateCompanyConfirmation(result.status === 'conflict');
 }
 
 async function previewCompany() {
@@ -740,12 +751,12 @@ async function previewCompany() {
     showAssociation(body);
   } catch (error) {
     if (revision !== associationRevision) return;
+    updateCompanyConfirmation();
     $('company-association').hidden = false;
     $('company-association').textContent = friendlyMessage(error.message) + '；确认资料时会重新核对，不会直接合并公司。';
   }
 }
 
-$('company-independent').addEventListener('change', () => invalidateConfirmation('请重新确认本次申请的公司资料。'));
 $('company-search-button').addEventListener('click', async () => {
   $('company-search-button').disabled = true;
   try {
@@ -924,7 +935,16 @@ async function showAuthenticatorQr(state) {
       headers:{'X-CSRF-Token':csrf(), 'X-VAT-Run-ID':qr.run_id}
     });
     if (response.status === 401) { clearAuthenticatorQr(); window.location.href = '/login'; return; }
-    if (!response.ok) throw new Error('暂时无法展示二维码，自动办理不受影响。请联系管理员检查安全连接。');
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const reason = typeof body.detail === 'string' ? body.detail : ({
+        403:'二维码访问校验未通过。',
+        404:'当前客户或任务不存在。',
+        409:'任务已变化，请刷新页面。',
+        410:'二维码展示已结束。'
+      })[response.status] || '二维码服务暂时不可用。';
+      throw new Error(`二维码未显示（${response.status}）：${reason} 此问题不影响后台自动处理验证码。`);
+    }
     const blob = await response.blob();
     if (controller.signal.aborted || revision !== statusRevision || authenticatorQrId !== qr.id || currentRunId !== qr.run_id) return;
     authenticatorQrUrl = URL.createObjectURL(blob);
@@ -933,7 +953,9 @@ async function showAuthenticatorQr(state) {
     $('authenticator-qr-message').textContent = '请直接扫码添加。能否登录以本次 HMRC 绑定成功为准。';
   } catch (error) {
     if (controller.signal.aborted || authenticatorQrId !== qr.id) return;
-    $('authenticator-qr-message').textContent = error.message;
+    $('authenticator-qr-message').textContent = error instanceof TypeError
+      ? '二维码请求未完成，请确认网络连接。此问题不影响后台自动处理验证码。'
+      : error.message;
   }
 }
 
@@ -964,13 +986,17 @@ function setMessage(id, text, kind='') {
 
 function syncExtractedValues() {
   document.querySelectorAll('[data-extracted-key]').forEach(input => {
-    if (input.dataset.extractedKey === 'email' && usesPoolPersonalEmail()) return;
+    if (input.dataset.extractedKey === 'email' && usesPoolPersonalEmail() && !input.value.trim()) return;
     const value = input.dataset.extractedKey === 'vat_number'
       ? normalizeVatNumber(input.value) : input.value.trim();
     if (input.dataset.extractedKey === 'vat_number') input.value = value;
     if (value) extractedValues[input.dataset.extractedKey] = value;
     else delete extractedValues[input.dataset.extractedKey];
   });
+  delete extractedValues.project_code;
+  const businessName = (extractedValues.business_name || '').trim();
+  if (businessName) extractedValues.application_reference = `UK-${businessName}`;
+  else delete extractedValues.application_reference;
 }
 
 function invalidateConfirmation(message='') {
@@ -978,72 +1004,147 @@ function invalidateConfirmation(message='') {
   if (message) setMessage('confirm-message', message, 'error');
 }
 
+function managedApplicationEmail() {
+  if (ACTIVE_STATUSES.includes(currentStatus)) return runtimePoolApplicationEmail;
+  const gateway = $('user-id').value.replace(/\s+/g, '') || (!gatewayInputDirty ? managedGatewayMailbox.gateway : '');
+  return $('method').value === 'Government Gateway' && $('auto-read-email').checked && mailPoolAvailable
+    && gateway === managedGatewayMailbox.gateway ? managedGatewayMailbox.email || '' : '';
+}
+
 function usesPoolPersonalEmail() {
   if (currentFlow !== 'vat') return false;
-  if (ACTIVE_STATUSES.includes(currentStatus)) return runtimeUsesMailPool;
-  return $('method').value === 'Create new sign in details' && mailPoolAvailable && $('use-mail-pool').checked;
+  if (ACTIVE_STATUSES.includes(currentStatus)) return runtimeUsesMailPool || !!runtimePoolApplicationEmail;
+  return !!managedApplicationEmail() || ($('method').value === 'Create new sign in details' && mailPoolAvailable && $('use-mail-pool').checked);
 }
 
 function syncPoolPersonalEmailField() {
   const input = document.querySelector('[data-extracted-key="email"]');
   if (!input || currentFlow !== 'vat') return;
   const automatic = usesPoolPersonalEmail();
+  const active = ACTIVE_STATUSES.includes(currentStatus);
+  const email = managedApplicationEmail();
+  const previous = input.value;
   const wasAutomatic = input.dataset.poolPersonal === 'true';
   if (automatic) {
-    if (!wasAutomatic) {
-      if (input.value.trim()) extractedValues.email = input.value.trim();
-      else delete extractedValues.email;
-    }
-    input.value = ACTIVE_STATUSES.includes(currentStatus) ? runtimePoolApplicationEmail : '';
+    if (!wasAutomatic) input.dataset.originalEmail = input.value;
+    input.value = email;
+    if (email) extractedValues.email = email;
   } else if (wasAutomatic) {
-    input.value = extractedValues.email || '';
+    input.value = input.dataset.originalEmail || '';
+    delete input.dataset.originalEmail;
+    if (input.value.trim()) extractedValues.email = input.value.trim();
+    else delete extractedValues.email;
   }
+  if (!active && previous !== input.value) invalidateConfirmation('VAT 个人邮箱已更新，请重新确认资料。');
   input.dataset.poolPersonal = String(automatic);
   input.readOnly = automatic;
   input.placeholder = automatic ? '开始办理后自动分配，与税务账号注册邮箱相同' : '';
   const hint = $('personal-email-pool-hint');
   if (hint) {
-    hint.hidden = !automatic;
-    hint.textContent = '个人邮箱将改用系统分配的注册邮箱，并提交给税务局；公司电子邮箱不变。支持自动获取验证码时会自动填写，否则会提示你输入。';
+    const missingManaged = !automatic && $('method').value === 'Government Gateway' && $('auto-read-email').checked;
+    hint.hidden = !automatic && !missingManaged;
+    hint.textContent = email
+      ? '已使用当前 GG 绑定的托管邮箱作为 VAT 个人邮箱，并从该邮箱读取验证码；公司电子邮箱不变。'
+      : missingManaged ? '尚未确认当前 GG 的托管邮箱，暂用这里填写的地址，该邮箱验证码可能需要手动输入。'
+        : '个人邮箱将使用系统分配的注册邮箱，并自动读取验证码；公司电子邮箱不变。';
   }
   updateGroupBadges();
 }
 
+function syncEoriNotificationEmail() {
+  if (currentFlow !== 'eori') return;
+  const input = document.querySelector('[data-extracted-key="vat_contact_email"]');
+  if (!input) return;
+  const active = ACTIVE_STATUSES.includes(currentStatus);
+  const email = managedApplicationEmail();
+  const previous = input.value;
+  if (email) {
+    if (input.dataset.ggManaged !== 'true') input.dataset.originalEmail = input.value;
+    input.value = email;
+  } else if (input.dataset.ggManaged === 'true') {
+    input.value = input.dataset.originalEmail || '';
+    delete input.dataset.originalEmail;
+  }
+  input.dataset.ggManaged = String(!!email);
+  input.readOnly = !!email;
+  extractedValues.vat_contact_email = input.value.trim();
+  if (!active && previous !== input.value) invalidateConfirmation('EORI 通知邮箱已更新，请重新确认资料。');
+  const hint = $('eori-email-hint');
+  if (hint) hint.textContent = email
+    ? '已使用当前 GG 绑定的托管邮箱，海关通知和邮箱验证码都会发送到此地址。'
+    : ($('method').value === 'Government Gateway' && $('auto-read-email').checked
+      ? '尚未确认当前 GG 的托管邮箱，当前仍使用这里填写的地址；请核对 GG 账号及绑定信息，该邮箱可能需要手动接码。'
+      : '勾选自动读取后，会使用当前 GG 绑定的托管邮箱；新建 GG 使用系统分配邮箱。未托管时使用这里填写的地址，并手动接码。');
+  updateGroupBadges();
+}
+
 function missingExtractedField(key) {
+  if (key === 'business_description' && /\[(products|platforms)\]/i.test(currentFieldValue(key))) return true;
   return !(key === 'email' && usesPoolPersonalEmail()) && !currentFieldValue(key);
 }
 
 function showLoginFields() {
   const creating = $('method').value === 'Create new sign in details';
   const automaticMfa = $('use-authenticator').checked;
+  const automaticEmail = mailPoolAvailable && $('use-mail-pool').checked;
+  const defaultSignupPassword = creating && credentialsFromEnv.includes('HMRC_PASSWORD');
   const active = ACTIVE_STATUSES.includes(currentStatus);
   $('new-account-fields').hidden = !creating;
-  $('mail-pool-options').hidden = !creating;
+  $('allocate-mail-label').hidden = !creating;
+  $('read-mail-label').hidden = creating;
+  $('auto-read-email').disabled = active || !mailPoolAvailable;
   $('existing-account-fields').hidden = creating;
   for (const id of ['email', 'phone', 'signup-name']) $(id).disabled = !creating;
   $('phone').disabled = !creating || automaticMfa;
   $('signup-phone-field').hidden = automaticMfa;
+  $('signup-email-field').hidden = automaticEmail;
+  $('signup-contact-fields').hidden = automaticEmail && automaticMfa;
+  $('authenticator-hint').textContent = creating
+    ? '自动设置并保存验证器，自动填写动态验证码，无需开户验证手机号。'
+    : '已保存当前账号验证器时可自动填写动态验证码，否则使用原绑定方式手动输入。';
+  $('authenticator-status').hidden = creating && $('authenticator-status').dataset.status !== 'unavailable';
   $('use-authenticator').disabled = active;
   if (automaticMfa || !isAdmin) $('fresh').checked = true;
   $('fresh').disabled = active || automaticMfa || $('enable-recording').checked;
-  $('email').disabled = !creating || (mailPoolAvailable && $('use-mail-pool').checked);
-  $('email').placeholder = mailPoolAvailable && $('use-mail-pool').checked ? '开始办理后自动分配，无需填写' : '';
+  $('email').disabled = !creating || automaticEmail;
+  $('email').placeholder = automaticEmail ? '开始办理后自动分配，无需填写' : '';
   $('use-mail-pool').disabled = !creating || !mailPoolAvailable || ACTIVE_STATUSES.includes(currentStatus);
+  $('mail-pool-hint').textContent = mailPoolAvailable
+    ? (creating ? '自动分配注册邮箱并读取验证码；VAT 个人邮箱或 EORI 通知邮箱使用同一地址。'
+      : (currentFlow === 'eori' ? '自动将 EORI 通知邮箱设为当前 GG 绑定的托管邮箱，并从该邮箱接码；未托管时保留填写值，手动接码。'
+        : '将 VAT 个人邮箱设为当前 GG 的托管邮箱并自动接码，不分配新邮箱；未托管时使用填写的邮箱并手动接码。'))
+    : '邮箱自动处理暂不可用，遇到邮箱验证时请人工接收并输入。';
   $('user-id').disabled = creating;
   $('password').autocomplete = creating ? 'new-password' : 'current-password';
+  $('password-field').hidden = defaultSignupPassword;
+  $('password').disabled = defaultSignupPassword;
+  $('credential-hint').hidden = defaultSignupPassword;
+  const nameAndPassword = defaultSignupPassword ? '注册姓名' : '注册姓名和密码';
   $('method-hint').textContent = creating
-    ? (automaticMfa ? '请确认注册邮箱、姓名和密码。系统自动设置验证器，无需短信验证手机号；申请联系手机号仍需填写。' : '请填写注册邮箱、姓名、密码和短信验证手机号。')
+    ? (automaticEmail && automaticMfa ? `系统自动分配注册邮箱并设置验证器，请确认${nameAndPassword}。`
+      : automaticMfa ? `请填写注册邮箱、${nameAndPassword}，系统自动设置验证器。`
+        : automaticEmail ? `系统自动分配注册邮箱，请填写${nameAndPassword}及短信验证手机号。`
+          : `请填写注册邮箱、${nameAndPassword}及短信验证手机号。`)
     : '使用已有账号和密码登录，无需填写注册邮箱或手机号；验证码使用该账号原有的接收方式。';
   document.querySelectorAll('[data-use-signup-email]').forEach(button => { button.hidden = !creating; });
   syncPoolPersonalEmailField();
+  syncEoriNotificationEmail();
 }
 
 $('method').addEventListener('change', () => {
   signInMethodPreset = true;
   loginMethodChosen = true;
+  if ($('method').value === 'Create new sign in details') {
+    $('use-mail-pool').checked = mailPoolAvailable;
+    $('use-authenticator').checked = true;
+    $('enable-recording').checked = false;
+  }
   showLoginFields();
 });
 $('use-mail-pool').addEventListener('change', showLoginFields);
+$('auto-read-email').addEventListener('change', showLoginFields);
+$('user-id').addEventListener('input', () => { gatewayInputDirty = true; showLoginFields(); });
+$('gateway-user-id-input').addEventListener('input', () => setTimeout(showLoginFields, 0));
 $('use-authenticator').addEventListener('change', () => {
   if ($('use-authenticator').checked) $('enable-recording').checked = false;
   showLoginFields();
@@ -1058,7 +1159,6 @@ function fieldLabel(key) {
   if (currentFlow === 'eori' && key === 'vat_contact_email') return 'EORI 通知邮箱';
   if (key === 'vat_contact_email') return '公司电子邮箱';
   if (key === 'business_phone') return '公司联系电话';
-  if (currentFlow === 'eori' && key === 'project_code') return '项目编号（选填，仅用于本地管理）';
   return extractedLabels[key] || key;
 }
 
@@ -1088,7 +1188,6 @@ function validateVatNumber() {
 
 // 与 HMRC Check your answers 的 section 对齐：准备页按同一套分组预演。
 const FIELD_GROUPS = [
-  {title:'项目信息', fields:['project_code','application_reference'], required:['project_code','application_reference']},
   {title:'申请人信息', fields:['full_name','first_name','last_name','birth_date'], required:['full_name','birth_date']},
   {title:'居住地址', lineKeys:['home_premises','home_street','home_locality','home_city','home_region','home_postcode','home_country'], sourceKeys:['residential_address'], sourceTitle:'原始居住地址', required:['home_premises','home_street','home_country']},
   {title:'公司信息', fields:['business_name','company_registration_country','company_identifier_type','company_registration_number','company_incorporation_date'], required:['business_name']},
@@ -1097,7 +1196,6 @@ const FIELD_GROUPS = [
   {title:'公司联系方式', fields:['vat_contact_email','business_phone'], required:[], hint:'公司电子邮箱来自资料中的“VAT沟通邮箱”，不会被自动分配的注册邮箱替换。'},
 ];
 const EORI_FIELD_GROUPS = [
-  {title:'内部管理（选填）', optionalFields:['project_code'], optionalTitle:'项目编号（留空不影响 EORI 注册）', required:[]},
   {title:'企业信息', fields:['business_name','company_registration_country','company_identifier_type','company_registration_number','company_incorporation_date'], required:['business_name','company_incorporation_date']},
   {title:'公司注册地址', lineKeys:['premises','street','locality','city','region','postcode','country'], sourceKeys:['business_address','business_postcode'], sourceTitle:'原始注册地址', required:['premises','street','city','postcode','country']},
   {title:'已有英国 VAT 登记信息', fields:['vat_number','vat_registration_date'], required:['vat_number','vat_registration_date']},
@@ -1130,8 +1228,15 @@ function fieldInputHtml(key, wide=false) {
     return `<div class="wide">
       <label for="eori-notification-email">EORI 通知邮箱（必填）</label>
       <input id="eori-notification-email" type="email" required data-extracted-key="vat_contact_email" value="${value}" aria-describedby="eori-email-hint">
-      <div id="eori-email-hint" class="hint">用于接收海关通知及邮箱验证码，可与注册邮箱不同。如资料中有“VAT沟通邮箱”会自动填入，请确认能接收邮件；留空不会自动使用注册邮箱。</div>
+      <div id="eori-email-hint" class="hint">自动读取开启时使用当前 GG 的托管邮箱接收通知和验证码；未托管时使用填写的邮箱，手动接码。</div>
       <button type="button" class="secondary" data-use-signup-email>使用注册邮箱</button>
+    </div>`;
+  }
+  if (key === 'business_description' && !(extractedValues[key] || '').trim()) {
+    return `<div class="wide">
+      <label for="business-description">${esc(label)}</label>
+      <textarea id="business-description" data-extracted-key="business_description">Ecommerce seller selling [products] through [platforms]</textarea>
+      <div class="hint">将 [products] 替换为英文产品名称，将 [platforms] 替换为实际平台，如 Amazon 或 Mercado Libre；也可直接改写整段描述。</div>
     </div>`;
   }
   const control = key === 'business_description'
@@ -1201,7 +1306,8 @@ function renderExtractedGroups() {
   const groups = fieldGroups();
   const knownGroups = currentFlow === 'eori' ? [...FIELD_GROUPS, ...EORI_FIELD_GROUPS] : groups;
   const known = new Set(knownGroups.flatMap(group => [...(group.fields||[]), ...(group.optionalFields||[]), ...(group.lineKeys||[]), ...(group.sourceKeys||[])]));
-  const extras = Object.keys(extractedLabels).filter(key => !known.has(key));
+  // 兼容旧初稿标签：已移除的项目编号和自动生成的参考名称不再展示。
+  const extras = Object.keys(extractedLabels).filter(key => !known.has(key) && !['project_code','application_reference'].includes(key));
   renderedGroups = extras.length ? [...groups, {title:'其他字段', fields:extras, required:[], collapsed:currentFlow !== 'eori'}] : [...groups];
   const wrap = $('extracted-groups');
   wrap.innerHTML = renderedGroups.map(renderGroupSection).join('')
@@ -1354,7 +1460,11 @@ $('confirm-extraction').addEventListener('click', async () => {
   const confirmedValues = JSON.stringify(extractedValues);
   $('confirm-extraction').disabled = true;
   try {
-    const response = await post('/api/company/confirm', {values:extractedValues, independent:$('company-independent').checked});
+    const response = await post('/api/company/confirm', {
+      values:extractedValues, independent:$('confirm-extraction').dataset.independent === 'true',
+      auto_read_email:$('method').value === 'Government Gateway' && mailPoolAvailable && $('auto-read-email').checked,
+      gateway_user_id:$('user-id').value.replace(/\s+/g, '')
+    });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || '保存客户资料失败');
     syncExtractedValues();
@@ -1367,6 +1477,11 @@ $('confirm-extraction').addEventListener('click', async () => {
     if (previousId && previousId !== customerId) clearAccountInputs();
     if (!loginMethodChosen && !$('user-id').value.trim()) signInMethodPreset = false;
     extractedValues = body.values;
+    managedGatewayMailbox = body.managed_gateway_mailbox || {};
+    if (managedGatewayMailbox.email && managedGatewayMailbox.gateway && !$('user-id').value.trim()) {
+      $('user-id').value = managedGatewayMailbox.gateway;
+      $('gateway-user-id-input').value = managedGatewayMailbox.gateway;
+    }
     statusRevision += 1;
     flowOptionsSignature = ''; historySignature = '';
     if (!ACTIVE_STATUSES.includes(currentStatus)) preparationRequested = true;
@@ -1385,7 +1500,7 @@ $('extracted-groups').addEventListener('input', event => {
   if (['business_name','company_registration_country','company_identifier_type','company_registration_number','company_incorporation_date'].includes(event.target.dataset.extractedKey)) {
     if (customerId && !ACTIVE_STATUSES.includes(currentStatus)) detachCompany();
     associationRevision += 1;
-    $('company-independent').checked = false;
+    updateCompanyConfirmation();
     clearTimeout(associationTimer);
     associationTimer = setTimeout(previewCompany, 350);
   }
@@ -1433,6 +1548,7 @@ $('start-form').addEventListener('submit', async event => {
   const method = $('method').value;
   const useAuthenticator = $('use-authenticator').checked;
   const useMailPool = method === 'Create new sign in details' && mailPoolAvailable && $('use-mail-pool').checked;
+  const autoReadEmail = useMailPool || (method === 'Government Gateway' && mailPoolAvailable && $('auto-read-email').checked);
   if (useMailPool && !/^[^\s@]+@[^\s@]+$/.test(extractedValues.vat_contact_email || '')) {
     setMessage('form-error', '请先填写公司电子邮箱 / EORI 通知邮箱；系统分配的注册邮箱不会替代它。', 'error'); return;
   }
@@ -1455,7 +1571,7 @@ $('start-form').addEventListener('submit', async event => {
     setMessage('form-error', '请填写税务登录密码。', 'error'); return;
   }
   const credentials = {
-    HMRC_SIGN_IN_METHOD:method, HMRC_PASSWORD:$('password').value,
+    HMRC_SIGN_IN_METHOD:method, HMRC_PASSWORD:$('password').disabled ? '' : $('password').value,
     HMRC_IS_TAX_AGENT:'No', HMRC_ACCESS_AS_BUSINESS:'Yes'
   };
   if (method === 'Government Gateway') {
@@ -1470,7 +1586,7 @@ $('start-form').addEventListener('submit', async event => {
   startInFlight = true;
   $('start').disabled = true;
   try {
-    const response = await post('/api/start', {fresh_session:!isAdmin || $('fresh').checked, resume:false, enable_recording:isAdmin && $('enable-recording').checked, use_mail_pool:useMailPool, use_authenticator:useAuthenticator, credentials, extracted_values:extractedValues, extracted_confirmed:extractionConfirmed});
+    const response = await post('/api/start', {fresh_session:!isAdmin || $('fresh').checked, resume:false, enable_recording:isAdmin && $('enable-recording').checked, use_mail_pool:useMailPool, auto_read_email:autoReadEmail, use_authenticator:useAuthenticator, credentials, extracted_values:extractedValues, extracted_confirmed:extractionConfirmed});
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || '启动失败');
     $('password').value = '';
@@ -1501,19 +1617,6 @@ $('start-form').addEventListener('submit', async event => {
   }
 });
 
-$('clear-credentials').addEventListener('click', async () => {
-  setMessage('form-error', '');
-  const response = await post('/api/credentials/clear', {});
-  const body = await response.json();
-  if (!response.ok) { setMessage('form-error', body.detail || '清除失败', 'error'); return; }
-  credentialsRemembered = false;
-  credentialsStored = false;
-  storedHasUserId = storedHasPassword = storedHasEmail = storedHasPhone = false;
-  $('password').value = '';
-  $('clear-credentials').hidden = true;
-  $('credential-hint').textContent = '已清除保存的登录信息，下次启动请按所选登录方式填写。';
-});
-
 // 两处账号输入代表同一个登录账号，编辑任意一处时保持一致。
 for (const [source, target] of [['user-id', 'gateway-user-id-input'], ['gateway-user-id-input', 'user-id']]) {
   $(source).addEventListener('input', () => {
@@ -1542,7 +1645,7 @@ $('save-credentials').addEventListener('click', async () => {
       credentials: {
         HMRC_USER_ID: userId,
         HMRC_EMAIL: $('email').disabled ? '' : $('email').value,
-        HMRC_PASSWORD: $('password').value,
+        HMRC_PASSWORD: $('password').disabled ? '' : $('password').value,
         HMRC_MFA_PHONE: $('phone').disabled ? '' : $('phone').value
       }
     });
@@ -1908,6 +2011,7 @@ async function refresh() {
     showAdmin(state.admin);
     runtimeUsesMailPool = !!state.use_mail_pool;
     runtimePoolApplicationEmail = state.pool_application_email || '';
+    managedGatewayMailbox = state.managed_gateway_mailbox || {};
     const poolEmailKey = `${state.run?.id || ''}:${runtimePoolApplicationEmail}`;
     if (currentFlow === 'vat' && runtimePoolApplicationEmail && poolEmailKey !== appliedPoolApplicationEmail) {
       extractedValues.email = runtimePoolApplicationEmail;
@@ -1915,23 +2019,34 @@ async function refresh() {
       if (personalEmail) personalEmail.value = runtimePoolApplicationEmail;
       appliedPoolApplicationEmail = poolEmailKey;
     }
+    if (currentFlow === 'eori' && runtimePoolApplicationEmail && poolEmailKey !== appliedPoolApplicationEmail) {
+      extractedValues.vat_contact_email = runtimePoolApplicationEmail;
+      const notificationEmail = document.querySelector('[data-extracted-key="vat_contact_email"]');
+      if (notificationEmail) notificationEmail.value = runtimePoolApplicationEmail;
+      appliedPoolApplicationEmail = poolEmailKey;
+    }
     if (ACTIVE_STATUSES.includes(currentStatus)) $('use-authenticator').checked = !!state.authenticator?.enabled;
+    if (ACTIVE_STATUSES.includes(currentStatus)) $('auto-read-email').checked = !!state.auto_read_email;
+    $('mail-reuse-notice').hidden = !state.mail_notice;
+    $('mail-reuse-notice').textContent = state.mail_notice || '';
+    $('task-mail-notice').hidden = !state.mail_notice;
+    $('task-mail-notice').textContent = state.mail_notice || '';
+    $('authenticator-status').dataset.status = state.authenticator?.status || '';
     $('authenticator-status').textContent = ({
       active:'当前账号已保存验证器，勾选后可自动填写动态验证码。',
       pending:'当前账号的验证器尚未确认绑定成功。请联系管理员核实，不要重复注册或重新绑定。',
       unavailable:'自动处理动态验证码暂不可用，请联系管理员；已有账号仍可使用原验证器手动输入。',
       missing:'当前账号尚未保存验证器；使用已有账号登录时，需要手动输入动态验证码，不会重新绑定。'
     })[state.authenticator?.status] || '';
+    const wasMailPoolAvailable = mailPoolAvailable;
     mailPoolAvailable = !!state.mail_pool?.enabled;
     if (!mailPoolAvailable) $('use-mail-pool').checked = false;
-    $('mail-pool-hint').textContent = mailPoolAvailable
-      ? `勾选后自动分配邮箱，${state.mail_pool.auto_code ? '注册账号的邮箱验证码可自动填写。' : '注册账号的邮箱验证码暂需手动输入。'}${currentFlow === 'vat' ? `个人电子邮箱也使用同一地址，${state.mail_pool.vat_auto_code ? '首次验证可自动填码' : '验证码需手动输入'}；公司电子邮箱不变。` : 'EORI 通知邮箱不变。'}`
-      : '自动分配邮箱暂不可用，请手动填写可用邮箱，或联系管理员。';
+    else if (!wasMailPoolAvailable && !ACTIVE_STATUSES.includes(currentStatus)) $('use-mail-pool').checked = true;
     $('mail-pool-diagnostics').textContent = isAdmin
       ? `邮箱池：已检查 ${state.mail_pool?.ready ?? 0}/${state.mail_pool?.total ?? 0}。${state.mail_pool?.error || ''}` : '';
     $('pool-email-status').hidden = !state.pool_email;
     $('pool-email-status').textContent = state.pool_email
-      ? (state.pool_application_email ? `本次注册邮箱 / VAT 个人电子邮箱：${state.pool_email}（公司电子邮箱保持不变）` : `本次注册邮箱：${state.pool_email}（EORI 通知邮箱保持不变）`) : '';
+      ? (state.pool_application_email ? `本次 GG 邮箱 / ${currentFlow === 'eori' ? 'EORI 通知邮箱' : 'VAT 个人电子邮箱'}：${state.pool_email}` : `本次 GG 托管邮箱：${state.pool_email}；申请联系邮箱按资料填写。`) : '';
     showLoginFields();
     if (currentRunId && state.run?.id && currentRunId !== state.run.id) {
       $('code').value = '';
@@ -1977,7 +2092,6 @@ async function refresh() {
     if (stopping) $('review-submit-consent').checked = false;
     identityCount = state.identity_documents ?? 0;
     credentialsRemembered = !!state.credentials_saved;
-    $('clear-credentials').hidden = !credentialsRemembered;
     credentialsFromEnv = state.credentials_env || [];
     const stored = state.credentials_stored || {};
     $('gateway-box').hidden = !(state.gateway_user_id || stored.saved);
@@ -2019,8 +2133,9 @@ async function refresh() {
       // 该客户已存过 GG 账号就预选 Government Gateway，否则用流程配置的默认方式。
       $('method').value = storedHasUserId ? 'Government Gateway' : state.sign_in_method;
       signInMethodPreset = true;
-      showLoginFields();
     }
+    // 先更新 GG 输入框和登录方式，再同步通知邮箱，避免预览沿用上一账号。
+    showLoginFields();
     const required = Number(state.identity_required ?? 3);
     if (required !== identityRequired) {
       identityRequired = required;

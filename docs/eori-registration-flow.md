@@ -56,7 +56,7 @@ Web UI 解析授权表后按下面的键提供给自动化；命令行配置里�
 | `vat_number` | 英国 VAT 号（9 位，可带 GB 前缀） |
 | `vat_registration_date` | VAT 注册生效日期 |
 | `company_incorporation_date` | 公司成立日期 |
-| `vat_contact_email` | EORI 通知邮箱（必填），接收海关通知及邮箱验证码；可与开户邮箱不同，不自动使用登录邮箱 |
+| `vat_contact_email` | EORI 通知邮箱，接收海关通知及邮箱验证码；开启自动读取时使用当前 GG 的托管邮箱，否则按填写值使用 |
 
 `vat_registration_date`、`company_incorporation_date` 会被 `prepare_document_values()`
 自动拆成 `<prefix>.day/.month/.year`（前缀分别是 `vat-registration-date`、
@@ -101,8 +101,10 @@ GG 登录使用 `HMRC_USER_ID`、`HMRC_PASSWORD`，验证码按账号已有设�
 
 | 情况 | 登录方式 | 需要提供 | 会发生什么 |
 | --- | --- | --- | --- |
-| 新客户，没有 GG 账号 | 手动选择 `Create new sign in details` | 登录邮箱、手机号、密码（+ 姓名） | 程序在申请过程中建号：邮箱验证码 → 姓名 → 密码 → 生成 User ID → MFA 短信验证码 |
-| 客户已有 GG 账号（例如我们自己帮客户做过 VAT 注册并留下 User ID/密码） | `Government Gateway`（默认） | Gateway User ID、密码，手机号用于 MFA | 直接登录，不会再走建号和邮箱验证 |
+| 新客户，没有 GG 账号 | 手动选择 `Create new sign in details` | 邮箱或自动分配、密码、姓名；自动 Authenticator 无需验证手机号 | 建号邮件可自动取码，并自动设置、保存 Authenticator；最终提交需人工确认 |
+| 客户已有 GG 账号（例如本系统办理 VAT 时创建） | `Government Gateway`（默认） | Gateway User ID、密码 | 复用此 GG 已绑定的托管邮箱和已激活 Authenticator；缺少托管能力的环节转人工，见 [邮箱池](mail-pool.md) |
+
+VAT 和 EORI 共用同一客户的 GG 凭据及验证器，但办理记录和申请资料分别保存。开启自动读取时，EORI 将当前 GG 的托管邮箱同步为通知邮箱 `vat_contact_email`，通过邮箱 API 自动取码；取消勾选或没有托管绑定时保留填写值，外部邮箱手动接码。VAT 中勾选申请 EORI 与单独 EORI 流程仍是不同入口，本次改动不自动串联申请或判断是否已获批。
 
 所以没有账号时选 Government Gateway 是走不通的：HMRC 会提示 User ID/密码不正确，
 程序会停在认证页并保存 `auth-validation-error` 截图。

@@ -148,11 +148,14 @@ class VatAutomation:
         stop_requested: Callable[[], bool] | None = None,
         enable_recording: bool = False,
         browser_ready_provider: Callable[[str, str], Awaitable[None]] | None = None,
-        email_verification_prepare: Callable[[str], Awaitable[None]] | None = None,
+        email_verification_prepare: Callable[[str], Awaitable[bool | None]] | None = None,
         email_verification_provider: Callable[[str], Awaitable[str]] | None = None,
         authenticator: AuthenticatorFlow | None = None,
-        vat_email_verification_prepare: Callable[[str], Awaitable[None]] | None = None,
+        vat_email_verification_prepare: Callable[[str], Awaitable[bool | None]] | None = None,
         vat_email_verification_provider: Callable[[str], Awaitable[str]] | None = None,
+        eori_email_verification_prepare: Callable[[str], Awaitable[bool | None]] | None = None,
+        eori_email_verification_provider: Callable[[str], Awaitable[str]] | None = None,
+        login_email_verification: bool = False,
     ) -> None:
         self.settings = settings
         self.interactive = interactive
@@ -164,6 +167,12 @@ class VatAutomation:
         self.email_verification_provider = email_verification_provider
         self.vat_email_verification_prepare = vat_email_verification_prepare
         self.vat_email_verification_provider = vat_email_verification_provider
+        self.eori_email_verification_prepare = eori_email_verification_prepare
+        self.eori_email_verification_provider = eori_email_verification_provider
+        self.login_email_verification = login_email_verification
+        self._login_email_prepared = False
+        self._eori_email_prepared = ""
+        self._eori_email_journey = ""
         if authenticator is not None and enable_recording:
             raise ValueError("自动管理 Authenticator 不能与浏览器录制同时启用。")
         self.authenticator = authenticator
@@ -413,6 +422,8 @@ class VatAutomation:
             return False
         if self.vat_email_verification_provider is not None and self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
             raise AutomationStopped("未找到 VAT 个人邮箱验证码输入框，已暂停供人工检查。")
+        if self._is_service_email_code_page(page.url):
+            raise AutomationStopped("未找到邮箱验证码输入框，请人工检查验证页面。")
 
         if self._is_honesty_declaration_page(page.url):
             await self._handle_honesty_declaration(page, heading)
@@ -494,6 +505,24 @@ class VatAutomation:
                 raise AutomationStopped("VAT 个人邮箱输入框发生变化，已暂停供人工检查。")
             # 用实际将提交的值校验分配归属，并在点击发码前建立本环节的新游标。
             await self.vat_email_verification_prepare(await email_input.input_value())
+            self._check_stop_requested()
+
+        if self.eori_email_verification_prepare is not None:
+            prefix = "/customs-registration-services/eori-only/register/matching/"
+            if self._is_vat_email_page(page.url, prefix + "what-is-your-email"):
+                email_input = page.locator('main form input[type="email"]:visible, main form input[name="email-address"]:visible')
+                if await email_input.count() != 1:
+                    raise AutomationStopped("EORI 通知邮箱输入框发生变化，请人工核对。")
+                self._eori_email_prepared = (await email_input.input_value()).strip()
+                await self.eori_email_verification_prepare(self._eori_email_prepared)
+            elif self._is_vat_email_page(page.url, prefix + "check-your-email"):
+                email = self.document_values.get("vat_contact_email", "").strip()
+                body = (await page.locator("main").inner_text()).casefold()
+                if not email or email.casefold() not in body:
+                    raise AutomationStopped("EORI 确认页邮箱与申请资料不一致，请人工核对。")
+                if self._eori_email_prepared.casefold() != email.casefold():
+                    self._eori_email_prepared = email
+                    await self.eori_email_verification_prepare(email)
             self._check_stop_requested()
 
         clicked = (
@@ -635,6 +664,10 @@ class VatAutomation:
             await user_input.fill(user_id)
             await password.first.fill(user_password)
             await self._audit("auth-credentials-filled", url=page.url)
+            if self.login_email_verification and self.email_verification_prepare is not None:
+                # 已有 GG 可能在提交登录后直接发邮件，须先记录游标。
+                await self.email_verification_prepare(self._credentials.get("HMRC_EMAIL", ""))
+                self._login_email_prepared = True
             if not await self._click_auth_action(page, ("Sign in", "Continue")):
                 raise AutomationStopped("登录页未找到安全的登录按钮。")
             return
@@ -651,9 +684,10 @@ class VatAutomation:
             await email_input.fill(email)
             await self._audit("auth-email-filled", url=page.url)
             # 必须在触发发码之前记游标；只接已知 GG 建号邮箱页，不推断其他验证。
-            if (urlparse(page.url).path.rstrip("/") == "/registration/email"
-                    and self.email_verification_prepare is not None):
+            if ((urlparse(page.url).path.rstrip("/") == "/registration/email" or self.login_email_verification)
+                    and self.email_verification_prepare is not None and not self._login_email_prepared):
                 await self.email_verification_prepare(email)
+                self._login_email_prepared = self.login_email_verification
                 self._check_stop_requested()
             if not await self._click_auth_action(page, ("Continue",)):
                 raise AutomationStopped("邮箱页面未找到继续按钮。")
@@ -762,7 +796,10 @@ class VatAutomation:
                     raise AutomationStopped("请明确确认短信验证手机号国家，不能自动判断是否为英国号码。")
                 audit_event = "mfa-phone-country-selected"
             else:
-                method = self._credentials.get("HMRC_MFA_METHOD", "Text message")
+                method = self._credentials.get("HMRC_MFA_METHOD", "")
+                if not method and self._sign_in_method() != "Create new sign in details":
+                    raise AutomationStopped("请按此 GG 原绑定方式选择短信或验证器，然后继续；系统不会自动更换验证方式。")
+                method = method or "Text message"
                 audit_event = "mfa-method-selected"
             option = page.get_by_label(method, exact=False)
             if not await option.count():
@@ -790,7 +827,8 @@ class VatAutomation:
         raise AutomationStopped("无法识别当前认证页面，已保存截图供检查。")
 
     async def _verification_code_input(self, page: Any, heading: str) -> Any | None:
-        if "code" not in normalize(heading) and not self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
+        if ("code" not in normalize(heading) and not self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH)
+                and not self._is_service_email_code_page(page.url)):
             return None
         locator = page.locator(
             'main form input[autocomplete="one-time-code"]:visible, '
@@ -801,13 +839,41 @@ class VatAutomation:
 
     async def _enter_verification_code(self, page: Any, code_input: Any) -> None:
         heading = await self._heading(page)
+        parsed = urlparse(page.url)
+        official_auth = (parsed.scheme == "https" and self._is_auth_page(page.url)
+                         and parsed.hostname in AUTH_HOSTS | {"tax.service.gov.uk", "www.tax.service.gov.uk"})
+        body = (await page.locator("main").inner_text()).casefold() if self.login_email_verification and official_auth else ""
+        login_email = self._credentials.get("HMRC_EMAIL", "").strip().casefold()
+        login_email_challenge = (
+            self.login_email_verification and official_auth and login_email and login_email in body
+            and "email" in body and "code" in normalize(heading)
+            and "/multi-factor/" not in parsed.path
+        )
         if (self.email_verification_provider is not None
                 and self._is_auth_page(page.url)
-                and urlparse(page.url).path.rstrip("/") == "/registration/code"):
+                and official_auth
+                and (parsed.path.rstrip("/") == "/registration/code" or login_email_challenge)):
             code = await self.email_verification_provider(heading)
         elif (self.vat_email_verification_provider is not None
                 and self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH)):
             code = await self.vat_email_verification_provider(heading)
+        elif (self.eori_email_verification_provider is not None
+                and self._is_service_email_page(page.url)):
+            email = self.document_values.get("vat_contact_email", "").strip()
+            page_text = (await page.locator("main").inner_text()).casefold()
+            if not email or email.casefold() not in page_text:
+                raise AutomationStopped("EORI 验证码页收件邮箱与本次通知邮箱不一致，已暂停。")
+            if not self._eori_email_prepared:
+                await self._audit("eori-email-direct-entry", url=page.url,
+                                  message="已直接进入 EORI 邮箱验证码页，使用本次启动前建立的邮件起点自动取码。")
+                self._eori_email_prepared = email
+            if (self._eori_email_prepared.casefold() != email.casefold()
+                    or (self._eori_email_journey and self._eori_email_journey != parsed.path)):
+                raise AutomationStopped("EORI 邮箱验证流程已变化，不能沿用前一个流程的验证码。")
+            self._eori_email_journey = parsed.path
+            await self._audit("eori-email-auto-reading", url=page.url,
+                              message="已进入 EORI 邮箱 API 自动取码。")
+            code = await self.eori_email_verification_provider(heading)
         elif self.verification_code_provider is not None:
             code = await self.verification_code_provider(heading)
         elif self.interactive:
@@ -1669,7 +1735,8 @@ class VatAutomation:
 
     async def _save_page_pdf(self, page: Any, reason: str) -> Path | None:
         """整页存成 PDF 供核对和打印；认证页不存档。"""
-        if self._is_auth_page(page.url) or self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
+        if (self._is_auth_page(page.url) or self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH)
+                or self._is_service_email_page(page.url)):
             return None
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         target = self.settings.artifacts_dir / f"{stamp}-{reason}.pdf"
@@ -1695,6 +1762,21 @@ class VatAutomation:
         return (parsed.scheme == "https"
                 and parsed.hostname in {"tax.service.gov.uk", "www.tax.service.gov.uk"}
                 and parsed.path.rstrip("/") == path)
+
+    @staticmethod
+    def _is_service_email_page(url: str) -> bool:
+        parsed = urlparse(url)
+        return (parsed.scheme == "https"
+                and parsed.hostname in {"tax.service.gov.uk", "www.tax.service.gov.uk"}
+                and parsed.path.startswith("/email-verification/"))
+
+    @staticmethod
+    def _is_service_email_code_page(url: str) -> bool:
+        """HMRC 公共邮箱验证服务；只接受官方 HTTPS 的明确验证码路由。"""
+        parsed = urlparse(url)
+        return (parsed.scheme == "https"
+                and parsed.hostname in {"tax.service.gov.uk", "www.tax.service.gov.uk"}
+                and re.fullmatch(r"/email-verification/journey/[^/]+/passcode/?", parsed.path) is not None)
 
     @staticmethod
     def _is_auth_page(url: str) -> bool:
@@ -1760,7 +1842,8 @@ class VatAutomation:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         png = self.settings.artifacts_dir / f"{stamp}-{reason}.png"
         metadata = self.settings.artifacts_dir / "current-page.json"
-        if self._is_auth_page(page.url) or self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH):
+        if (self._is_auth_page(page.url) or self._is_vat_email_page(page.url, VAT_EMAIL_CODE_PATH)
+                or self._is_service_email_page(page.url)):
             # 整页遮盖：设置密钥可能同时出现在二维码、文本和输入框中。
             from PIL import Image, ImageDraw
             placeholder = Image.new("RGB", (960, 160), "#f1f5f9")
@@ -1807,7 +1890,7 @@ class VatAutomation:
                 await result
 
     async def _save_state(self, url: str) -> None:
-        if self._is_auth_page(url):
+        if self._is_auth_page(url) or self._is_service_email_page(url):
             # 身份认证 URL 常带一次性会话标识，不保存为可恢复断点。
             url = self.settings.start_url
         elif self._is_vat_email_page(url, VAT_EMAIL_CODE_PATH):
@@ -1868,6 +1951,7 @@ def _safe_url(value: str) -> str:
         r"\1/[redacted]",
         parsed.path,
     )
+    path = re.sub(r"(/email-verification/journey)/[^/]+", r"\1/[redacted]", path)
     host = parsed.hostname or ""
     port = f":{parsed.port}" if parsed.port else ""
     return f"{parsed.scheme}://{host}{port}{path}"

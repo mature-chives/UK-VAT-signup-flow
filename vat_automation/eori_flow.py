@@ -12,7 +12,7 @@ EORI_START_URL = "https://www.gov.uk/eori/apply-for-eori"
 EORI_GUIDE_URL = "https://www.gov.uk/eori"
 EORI_SERVICE_ROOT = "/customs-registration-services/eori-only"
 EORI_REGISTER_PATH = f"{EORI_SERVICE_ROOT}/register"
-# customs 通知邮箱：使用人工核对过的资料字段，不自动复用登录邮箱。
+# customs 通知邮箱：自动接码时 Web 已将当前 GG 托管邮箱同步到此资料字段。
 EORI_EMAIL_ANSWER = "doc:vat_contact_email"
 # VAT 注册地址邮编：优先用结构化地址里的 postcode，退回授权表的原始邮编。
 EORI_VAT_POSTCODE_ANSWER = "doc:postcode|doc:business_postcode"

@@ -87,7 +87,13 @@ class CredentialStore:
         with self._lock:
             owners = self._load()
             existing = owners.get(owner_id) or {}
-            merged = {**dict(existing.get("values", {})), **clean}
+            previous = dict(existing.get("values", {}))
+            if (clean.get("HMRC_USER_ID") and previous.get("HMRC_USER_ID")
+                    and clean["HMRC_USER_ID"] != previous["HMRC_USER_ID"]):
+                for key in ("HMRC_EMAIL", "HMRC_MFA_METHOD", "HMRC_MFA_PHONE",
+                            "HMRC_MFA_PHONE_IS_UK", "HMRC_MFA_PHONE_COUNTRY"):
+                    previous.pop(key, None)
+            merged = {**previous, **clean}
             record = {"values": merged, "updated_at": _now()}
             owners[owner_id] = record
             self._save(owners)

@@ -76,14 +76,23 @@ class MailVerifier:
         self.prepared_once = False
         self.notice = ""
 
-    async def prepare(self, email: str) -> None:
+    async def prime(self, email: str) -> bool:
+        """浏览器启动前建立基线，兼容登录后直接进入验证码页；不消耗正常发码页的初始化。"""
+        if self.prepared_once or self.attempted or self.cursor is not None:
+            raise MailError("本次邮箱读取已经开始，不能重置任务起点。")
+        ready = await self.prepare(email)
+        self.prepared_once = False
+        return ready
+
+    async def prepare(self, email: str) -> bool:
         self.cursor = None
+        self.notice = ""
         if not self.rules:
             self.notice = "未配置已核对的邮件模板，请人工输入验证码。"
-            return
+            return False
         if self.prepared_once:
             self.notice = "本验证环节重复发码或返回邮箱页，请人工核对验证码。"
-            return
+            return False
         self.prepared_once = True
         try:
             if email.casefold() != self.allocation["email"].casefold():
@@ -94,8 +103,10 @@ class MailVerifier:
             messages = await self.client.messages(account_id, size=1, full=False)
             self.cursor = max((item["emailId"] for item in messages), default=0)
             self.sent_after = time.time()
+            return True
         except MailError as exc:
             self.notice = str(exc)
+            return False
 
     async def receive(self, *, timeout: float = 150, interval: float = 4) -> str | None:
         if self.cursor is None or self.attempted:

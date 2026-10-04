@@ -17,7 +17,6 @@ from .countries import address_country, infer_address_country, normalize_country
 
 
 FIELD_DEFINITIONS: dict[str, tuple[str, tuple[str, ...]]] = {
-    "project_code": ("项目编号（来自文件名）", ()),
     "application_reference": ("HMRC申请参考名称", ()),
     "title": ("称谓", ("称谓（女士/先生）", "title")),
     "business_name": (
@@ -139,7 +138,7 @@ DOCUMENT_DATE_FIELDS: tuple[tuple[str, str], ...] = (
     ("vat_registration_date", "vat-registration-date"),
 )
 VAT_REGISTRATION_FIELD_KEYS = (
-    "project_code", "application_reference",
+    "application_reference",
     "full_name", "first_name", "last_name", "birth_date",
     "email", "phone", "residential_address",
     "home_premises", "home_street", "home_locality", "home_city",
@@ -172,14 +171,6 @@ def extract_document(filename: str, content: bytes) -> dict[str, Any]:
     parsed_values = _derive_values(raw_values)
     if raw_values.get("_uscc") and raw_values.get("_brn"):
         warnings.append("资料同时含内地统一社会信用代码及香港 BRN，请核对当前办理公司，不能自动选取其一。")
-    project_code = _extract_project_code(filename)
-    if project_code:
-        parsed_values["project_code"] = project_code
-        business_name = parsed_values.get("business_name", "").strip()
-        if business_name:
-            parsed_values["application_reference"] = (
-                f"{project_code}-UK-{business_name}"
-            )
     values = {
         key: parsed_values[key]
         for key in VAT_REGISTRATION_FIELD_KEYS
@@ -240,6 +231,11 @@ def prepare_document_values(values: Mapping[str, str]) -> dict[str, str]:
         if str(value).strip()
     }
     bag = normalized_identity_values(bag)
+    # 参考名称由当前公司名生成，旧资料中的项目编号和参考名称不再参与填表。
+    bag.pop("project_code", None)
+    bag.pop("application_reference", None)
+    if business_name := bag.get("business_name", "").strip():
+        bag["application_reference"] = f"UK-{business_name}"
     if bag.get("vat_number"):
         bag["vat_number"] = normalize_vat_number(bag["vat_number"])
         if not re.fullmatch(r"[0-9]{9}", bag["vat_number"]):
@@ -262,6 +258,8 @@ def prepare_document_values(values: Mapping[str, str]) -> dict[str, str]:
 
 def validate_application_values(values: Mapping[str, str], *, is_eori: bool = False) -> None:
     """两个网页入口在启动和继续前共用的地址国家校验。"""
+    if not is_eori and re.search(r"\[(products|platforms)\]", values.get("business_description", ""), re.IGNORECASE):
+        raise ValueError("请将业务描述模板中的 [products] 和 [platforms] 替换为实际产品与销售平台。")
     english_keys = ["premises", "street", "locality", "city", "region"]
     if not is_eori:
         english_keys += ["home_" + key for key in english_keys] + ["business_description"]
@@ -693,6 +691,9 @@ def _derive_values(values: dict[str, str]) -> dict[str, str]:
                 derived["company_identifier_type"] = kind
                 break
     derived = normalized_identity_values(derived)
+    derived.pop("application_reference", None)
+    if business_name := derived.get("business_name", "").strip():
+        derived["application_reference"] = f"UK-{business_name}"
     if derived.get("vat_number"):
         derived["vat_number"] = normalize_vat_number(derived["vat_number"])
     if derived.get("full_name"):
@@ -838,15 +839,3 @@ def _field_key(value: str) -> str:
 def _flexible_label_pattern(value: str) -> str:
     """模板标签中的人工空格可有可无，其余字符仍按原文精确匹配。"""
     return r"\s*".join(re.escape(part) for part in re.split(r"\s+", value.strip()))
-
-
-def _extract_project_code(filename: str) -> str:
-    stem = Path(filename).stem
-    # 项目编号自身采用“英文字母 + 数字”的格式。编号后的内容是可变的
-    # 公司名称或人工备注，不能作为识别条件，也不能并入项目编号。
-    match = re.search(
-        r"新注册\s*VAT[-_\s]*([A-Za-z]+\d+)",
-        stem,
-        flags=re.IGNORECASE,
-    )
-    return match.group(1).upper() if match else ""

@@ -32,13 +32,27 @@ VAT_PERSONAL_EMAIL_RULE = {
 }
 
 
+class MailPoolCooldown(MailError):
+    """已知邮箱尚在冷却；调用方可以在启动浏览器前可取消地等待。"""
+
+    def __init__(self, until: float) -> None:
+        super().__init__("原申请邮箱仍在冷却，正在等待可用；不会更换邮箱。")
+        self.until = until
+
+
+class MailPoolBusy(MailError):
+    """当前邮箱仍有独占任务，等待释放，不能并发读取验证码。"""
+
+
 def code_rules_for_purpose(rules: list[dict[str, Any]], purpose: str) -> list[dict[str, Any]]:
     """按页面用途隔离模板；已核对的 VAT 模板内置，现有 GG 配置不变。"""
-    if purpose not in {"gg_signup", "vat_personal_email"}:
+    if purpose not in {"gg_signup", "gg_login", "vat_personal_email", "eori_notification"}:
         raise MailError("不支持此邮箱验证用途。")
     matched = [dict(rule) for rule in rules if rule.get("purpose") == purpose]
-    if not matched and purpose == "vat_personal_email":
-        return [dict(VAT_PERSONAL_EMAIL_RULE)]
+    if not matched and purpose in {"vat_personal_email", "eori_notification"}:
+        return [{**VAT_PERSONAL_EMAIL_RULE, "purpose": purpose}]
+    if not matched and purpose == "gg_login":
+        return [{**rule, "purpose": purpose} for rule in rules if rule.get("purpose") == "gg_signup"]
     return matched
 
 
@@ -107,7 +121,7 @@ def validate_config(data: Any) -> dict[str, Any]:
     if not isinstance(rules, list):
         raise MailError("code_rules 必须是数组。")
     for rule in rules:
-        if (not isinstance(rule, dict) or rule.get("purpose") not in ("gg_signup", "vat_personal_email")
+        if (not isinstance(rule, dict) or rule.get("purpose") not in ("gg_signup", "gg_login", "vat_personal_email", "eori_notification")
                 or any(not isinstance(rule.get(k), str) or not rule[k].strip()
                        or len(rule[k]) > 200 for k in ("sender", "subject_contains", "code_prefix"))):
             raise MailError("验证码模板必须明确用途、发件地址、主题和代码前缀。")
@@ -154,6 +168,9 @@ class MailPool:
                     account_id INTEGER, user_id INTEGER, lease TEXT NOT NULL DEFAULT '',
                     cooldown REAL NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS bindings (binding TEXT PRIMARY KEY, email TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS gateway_mailboxes (
+                    binding TEXT NOT NULL, gateway TEXT NOT NULL, email TEXT NOT NULL,
+                    PRIMARY KEY(binding, gateway));
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS attempted (
                     email TEXT NOT NULL, email_id INTEGER NOT NULL,
@@ -245,13 +262,71 @@ class MailPool:
             config["enabled"] = enabled
             private_json(self.config_path, config)
 
-    def acquire(self, binding: str, lease: str, preferred_email: str = "") -> dict[str, Any]:
+    def bind_gateway(self, binding: str, gateway: str, email: str, *, lease: str = "") -> None:
+        """仅记录实际建号邮箱；无 lease 的旧数据迁移由调用方确认已激活验证器。"""
+        if not gateway.isdigit() or len(gateway) != 12 or not email:
+            raise MailError("GG 与邮箱绑定信息不完整，请人工核对。")
+        with self.transaction() as db:
+            previous = db.execute("SELECT email FROM bindings WHERE binding=?", (binding,)).fetchone()
+            if not previous or previous["email"] != email.casefold():
+                raise MailError("邮箱不属于当前客户的原分配记录。")
+            if lease and not db.execute("SELECT 1 FROM accounts WHERE email=? AND lease=?",
+                                        (email.casefold(), lease)).fetchone():
+                raise MailError("邮箱占用已变更，不能记录 GG 绑定。")
+            key = binding_key(gateway)
+            current = db.execute("SELECT email FROM gateway_mailboxes WHERE binding=? AND gateway=?",
+                                 (binding, key)).fetchone()
+            if current and current["email"] != email.casefold():
+                raise MailError("此 GG 已绑定其他邮箱，请人工核对。")
+            if not lease and not current and db.execute(
+                "SELECT 1 FROM gateway_mailboxes WHERE binding=?", (binding,)
+            ).fetchone():
+                raise MailError("已有明确 GG 绑定，不能继续推断旧账号归属。")
+            db.execute("INSERT OR IGNORE INTO gateway_mailboxes VALUES (?,?,?)",
+                       (binding, key, email.casefold()))
+            if lease:
+                # 新建成功后把本次占用归属转为实际 GG，之后登录可直接复用。
+                db.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (
+                    binding_key("mail-owner", email.casefold()), binding_key(binding, key),
+                ))
+
+    def gateway_email(self, binding: str, gateway: str, *, legacy_email: str = "") -> str:
+        """读取明确绑定，或预览经调用方核实验证器的旧版客户邮箱；不写入推断结果。"""
+        if not gateway or not self.db_path.exists():
+            return ""
+        with self.transaction() as db:
+            row = db.execute("SELECT email FROM gateway_mailboxes WHERE binding=? AND gateway=?",
+                             (binding, binding_key(gateway))).fetchone()
+            if row:
+                return row["email"]
+            if legacy_email and not db.execute(
+                "SELECT 1 FROM gateway_mailboxes WHERE binding=?", (binding,)
+            ).fetchone():
+                previous = db.execute("SELECT email FROM bindings WHERE binding=?", (binding,)).fetchone()
+                if previous and previous["email"] == legacy_email.strip().casefold():
+                    return previous["email"]
+            return ""
+
+    def acquire(self, binding: str, lease: str, preferred_email: str = "", *,
+                existing_gateway: str = "", notification_email: str = "") -> dict[str, Any]:
         with self.transaction() as db:
             config = self.config()
             self._check_revision(db, config)
             if config.get("enabled") is not True:
                 raise MailError("邮箱池未启用，请先由管理员完成导入和检查。")
             previous = db.execute("SELECT email FROM bindings WHERE binding=?", (binding,)).fetchone()
+            # 复用只能从当前客户的明确 GG 绑定中取邮箱，绝不回退到新分配。
+            reuse = bool(existing_gateway or notification_email)
+            owner = binding_key(binding, binding_key(existing_gateway)) if existing_gateway else binding_key(binding, "signup" if not notification_email else "notification")
+            if reuse:
+                if existing_gateway:
+                    previous = db.execute("SELECT email FROM gateway_mailboxes WHERE binding=? AND gateway=?",
+                                          (binding, binding_key(existing_gateway))).fetchone()
+                else:
+                    previous = db.execute("SELECT email FROM gateway_mailboxes WHERE binding=? AND email=?",
+                                          (binding, notification_email.casefold())).fetchone()
+                if not previous:
+                    raise MailError("该 GG 或通知邮箱没有当前客户的托管绑定，请人工接收验证码。")
             if previous and preferred_email and previous["email"] != preferred_email.casefold():
                 raise MailError("当前保存邮箱与原申请绑定不一致，请先人工核对。")
             if previous or preferred_email:
@@ -261,10 +336,13 @@ class MailPool:
                 if not row:
                     raise MailError("原申请邮箱已停用，请检查配置；不会自动更换开户邮箱。")
                 if row["lease"]:
-                    raise MailError("原申请邮箱仍被占用；异常退出后须管理员核实并解除占用。")
-                if row["cooldown"] > time.time():
-                    raise MailError("原申请邮箱正在冷却，请稍后继续；不会更换邮箱。")
-                if not previous:
+                    raise MailPoolBusy("原申请邮箱仍被占用；异常退出后须管理员核实并解除占用。")
+                last_owner = db.execute("SELECT value FROM meta WHERE key=?",
+                                        (binding_key("mail-owner", row["email"]),)).fetchone()
+                same_gateway = bool(existing_gateway and last_owner and last_owner["value"] == owner)
+                if row["cooldown"] > time.time() and not same_gateway:
+                    raise MailPoolCooldown(row["cooldown"])
+                if not previous and not reuse:
                     db.execute("INSERT INTO bindings VALUES (?,?)", (binding, row["email"]))
             else:
                 cursor = db.execute("SELECT value FROM meta WHERE key='cursor'").fetchone()
@@ -280,6 +358,8 @@ class MailPool:
             if account is None:
                 raise MailError("邮箱配置与调度记录不一致，请重新导入。")
             db.execute("UPDATE accounts SET lease=? WHERE email=?", (lease, row["email"]))
+            db.execute("INSERT OR REPLACE INTO meta VALUES (?,?)",
+                       (binding_key("mail-owner", row["email"]), owner))
             return {**dict(row), **account, "base_url": config["base_url"],
                     "code_rules": config.get("code_rules", []), "lease": lease}
 
