@@ -154,4 +154,4 @@ python scripts/check_flow_coverage.py vat-config.test.json
 
 ## 部署形态
 
-新增 tCloud 内部试用容器部署：`compose.yaml` 管理本项目的 Web（Chrome + Xvfb）与独立 Nginx 反向代理，默认 HTTPS 16671 端口，使用自签证书；详见 `docs/server-deployment.md`。本次为全新环境，不迁移本地客户、GG、邮箱池或 Authenticator 数据。不运行真实注册流程。仍可在服务器本机以 editable 方式运行 `vat-web` 或 `vat-bench`，两者能力不能混同。Playwright Chrome 始终在服务端运行，同事通过浏览器看状态、输验证码、核对最终 PDF。证件 OCR 双机设计见 `docs/id-card-translation-architecture.md`，目前 OCR 仍在工作台进程内运行。
+新增 tCloud 内部试用容器部署：`compose.yaml` 管理本项目的 Web（Chrome + Xvfb）与独立 Nginx 反向代理，默认 HTTPS 16671 端口，使用自签证书；详见 `docs/server-deployment.md`。按用户要求迁移本地 Web 用户、客户、GG、邮箱池、Authenticator 及 `.env`，私有数据不进入 Git 或镜像；本地数据保留，不复制浏览器会话。不运行真实注册流程。仍可在服务器本机以 editable 方式运行 `vat-web` 或 `vat-bench`，两者能力不能混同。Playwright Chrome 始终在服务端运行，同事通过浏览器看状态、输验证码、核对最终 PDF。证件 OCR 双机设计见 `docs/id-card-translation-architecture.md`，目前 OCR 仍在工作台进程内运行。
